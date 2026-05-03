@@ -29,7 +29,7 @@ belfry is the inverse: outbound-only at first, then bidirectional, multi-termina
    ```
    BELFRY_TOKEN=<token> BELFRY_CHAT_ID=<chat-id> node bin/belfry.js
    ```
-5. (Optional, for inbound replies) Install the Stop hook — see `docs/install-hooks.md`.
+5. (For inbound replies) Add the belfry MCP plugin to each project you want to drive — see `docs/install-mcp.md`. Drop a `.mcp.json` at the project root pointing at `bin/belfry-mcp.js` and restart the Claude Code session.
 6. For an always-on setup, write a small launcher that pulls the credentials from your secret store of choice (env, dotenv, AWS Secrets Manager, age-encrypted YAML, whatever you use) and `exec`s `node bin/belfry.js`. Belfry itself is intentionally agnostic — it just reads env vars.
 
 ## Required env vars
@@ -39,39 +39,34 @@ belfry is the inverse: outbound-only at first, then bidirectional, multi-termina
 | `BELFRY_TOKEN` | yes | Bot token from @BotFather |
 | `BELFRY_CHAT_ID` | yes | Numeric chat ID where messages should land |
 | `BELFRY_FORUM_TOPIC_ID` | no | Forum topic ID, if posting to a Telegram Forum group's topic rather than a plain chat |
-| `BELFRY_MCP_PORT` | no | Local MCP HTTP port (default `9876`). Bound to loopback only. |
+| `BELFRY_MCP_PORT` | no | Local registry HTTP port (default `9876`). Bound to loopback only. The per-session MCP plugin uses `BELFRY_MCP_BASE` (default `http://127.0.0.1:9876`) to find the daemon. |
 
 ## Architecture (one diagram)
 
 ```
-                 outbound                                inbound
-  Claude Code hooks                            Telegram (your phone)
-        ↓                                              ↕
-  claudelike-bar hook                           getUpdates poller
-        ↓                                              ↓
-  /tmp/claude-dashboard/<slug>.json            per-slug inbox (in-process)
-        ↓                                              ↓
-  chokidar watcher                             HTTP MCP server (127.0.0.1)
-        ↓                                              ↓
-  composer + throttle                          Claude Code Stop hook
-        ↓                                          drains inbox,
-  Telegram sendMessage                          returns text as
-        ↓                                       continuation prompt
-  phone
+                  Telegram (one bot, one chat)
+                            ↕
+                  belfry-daemon (bin/belfry.js)
+                  ↑           ↓
+       outbound watcher   HTTP loopback registry
+                            ↓
+        ┌───────────────────┼───────────────────┐
+        ↓                   ↓                   ↓
+    session A           session B           session C
+   [belfry-mcp]        [belfry-mcp]        [belfry-mcp]
 ```
 
-Single belfry daemon owns: the chokidar watcher, the Telegram poller, the per-slug inboxes, and the local HTTP MCP endpoint.
+**Two processes.** The daemon owns the bot, polls Telegram, and runs the chokidar watcher → composer chain for outbound. Each session you want bidirectional runs a tiny `belfry-mcp` stdio plugin that registers with the daemon and long-polls for replies. When a reply arrives, the plugin emits MCP `notifications/claude/channel` to inject the text into its parent claude — the same mechanism the bundled `plugin:telegram` uses for one-session bidirectional, generalized to N sessions sharing one bot.
 
 ## What's shipped
 
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Outbound: chokidar watcher → composer → Telegram | shipped |
-| 1 | Inbound continuation: HTTP MCP + inbox + poller + Stop hook | shipped |
-| 2 | Inbound interrupt: PreToolUse hook for "stop, do X instead" | tracked in [#3](https://github.com/harteWired/belfry/issues/3) |
-| 3 | Inbound permission answer: Notification hook | tracked in [#4](https://github.com/harteWired/belfry/issues/4) |
+| 1 | Inbound (Stop-hook + inbox MCP) | shipped, then replaced by Phase 2 |
+| 2 | Inbound (per-session MCP plugin + central registry) | shipped — works for active *and* idle sessions |
 
-Other open work: standalone (no claudelike-bar dep) tracked in [#6](https://github.com/harteWired/belfry/issues/6); hygiene cleanups in [#5](https://github.com/harteWired/belfry/issues/5).
+Out of scope for now: per-session permission answers, interrupt-and-replace mid-tool-call. Both possible on top of Phase 2 by adding more notification methods to the plugin.
 
 ## Running tests
 
@@ -79,4 +74,4 @@ Other open work: standalone (no claudelike-bar dep) tracked in [#6](https://gith
 npm test
 ```
 
-Pure ESM, Node ≥ 20. Only runtime dep is `chokidar`. Telegram client is native `fetch`; MCP server is hand-rolled JSON-RPC over `node:http`. No SDK required for either side.
+Pure ESM, Node ≥ 20. Only runtime dep is `chokidar`. Telegram client is native `fetch`; MCP plugin is hand-rolled JSON-RPC over stdio; registry is hand-rolled HTTP over `node:http`. No SDK required.

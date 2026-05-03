@@ -24,72 +24,61 @@ It isn't:
 
 1. A general-purpose webhook router — Telegram is the only target.
 2. A retry / circuit-breaker framework — per-slug throttle covers the spam case; transient API failures are logged and dropped.
-3. A daemon you run on a remote host — MCP binds to loopback only; assume the same machine as Claude Code.
-4. A multiplexer or keystroke-injection shim — the user's terminal stays sovereign. Inbound replies enter sessions only via Claude Code hook return values (see "Bidirectional design" below).
+3. A daemon you run on a remote host — registry binds to loopback only; assume the same machine as Claude Code.
+4. A multiplexer or keystroke-injection shim. Inbound replies enter a session through the per-session `belfry-mcp` plugin emitting `notifications/claude/channel` — same path `plugin:telegram` uses, just with a central daemon owning the bot and routing across sessions.
 
 ## Architecture
 
 ```
-                 outbound                                inbound
-  Claude Code hooks                            Telegram (your phone)
-        ↓                                              ↕
-  claudelike-bar hook                           getUpdates poller
-        ↓                                              ↓
-  /tmp/claude-dashboard/<slug>.json            per-slug inbox (in-process)
-        ↓                                              ↓
-  chokidar watcher                             HTTP MCP server (127.0.0.1)
-        ↓                                              ↓
-  composer + throttle                          Claude Code hooks call MCP
-        ↓                                              ↓
-  Telegram sendMessage                         Stop / PreToolUse hook
-        ↓                                         returns reply as
-  phone                                          decision/reason text
+                  Telegram (one bot, one chat)
+                            ↕
+                  belfry-daemon
+                  ↑           ↓
+       outbound watcher   HTTP loopback registry
+                            ↓
+        ┌───────────────────┼───────────────────┐
+        ↓                   ↓                   ↓
+    session A           session B           session C
+   [belfry-mcp]        [belfry-mcp]        [belfry-mcp]
 ```
 
-Single belfry process owns: the chokidar watcher, the Telegram poller, the per-slug inboxes, and the local HTTP MCP endpoint.
+Two processes:
+1. **belfry-daemon** (`bin/belfry.js`) — long-running, owns the Telegram bot. Outbound watcher → composer → sendMessage. Inbound poller → Registry → fan out to registered plugins.
+2. **belfry-mcp** (`bin/belfry-mcp.js`) — one per Claude Code session that wants to receive replies. stdio MCP server connected to its parent claude. On startup registers with the daemon over loopback HTTP. Long-polls for routed messages; emits `notifications/claude/channel` (the same mechanism `plugin:telegram` uses) to inject text into the session as user input.
 
 ## Source layout
 
 ```
-bin/belfry.js          — entry point + daemon loop
-lib/watcher.js         — chokidar watcher on /tmp/claude-dashboard/*.json
-lib/composer.js        — 3-line mobile-friendly message builder
-lib/telegram.js        — Bot API HTTP helper (sendMessage)
-lib/throttle.js        — per-slug rate limiting + coalesce
-lib/config.js          — load + validate ~/.claude/belfry.jsonc
-lib/inbox.js           — per-slug inbox (continuation + interrupt queues)
-lib/reply-tracker.js   — outbound message_id → slug LRU
-lib/router.js          — incoming Telegram update → (slug, queue, text)
-lib/poller.js          — Telegram getUpdates long-poll loop
-lib/mcp-server.js      — JSON-RPC over HTTP on 127.0.0.1, drain/peek tools
-lib/slug.js            — slug derivation (mirrors claudelike-bar's rules)
-hooks/stop-hook.js     — installable Stop hook (Phase 1)
-test/                  — node --test
+bin/belfry.js              — daemon entry point + daemon loop
+bin/belfry-mcp.js          — per-session MCP plugin (registers, recv-loop, inject)
+lib/watcher.js             — chokidar watcher on /tmp/claude-dashboard/*.json
+lib/composer.js            — 3-line mobile-friendly message builder
+lib/telegram.js            — Bot API HTTP helper (sendMessage)
+lib/throttle.js            — per-slug rate limiting + coalesce
+lib/config.js              — load + validate ~/.claude/belfry.jsonc
+lib/reply-tracker.js       — outbound message_id → slug LRU
+lib/router.js              — incoming Telegram update → (slug, text)
+lib/poller.js              — Telegram getUpdates long-poll loop
+lib/registry.js            — HTTP register/unregister/recv for belfry-mcp instances
+lib/slug.js                — slug derivation (mirrors claudelike-bar's rules)
+docs/install-mcp.md        — how to add belfry-mcp to a project
+test/                      — node --test
 ```
 
-Phase 2 will add `hooks/pre-tool-use-hook.js` (interrupt-and-replace) and an interrupt-routing branch in `lib/router.js`. Phase 3 adds `hooks/notification-hook.js`.
+## Bidirectional design
 
-## Bidirectional design (binding spec for in-progress work)
+**Mechanism.** belfry-mcp emits MCP `notifications/claude/channel` to inject Telegram text into its parent claude session as user input. This is the same channel notification path the bundled `plugin:telegram` uses for one-session bidirectional — belfry generalizes it to N sessions sharing one bot, with the daemon owning the routing.
 
-**Mechanism.** Replies enter sessions only through Claude Code hook return values. No keystroke injection, no terminal multiplexer.
+1. **Per-session plugin (`bin/belfry-mcp.js`).** Loaded via `.mcp.json` in projects that want bidirectional. On `initialize` it declares `claude/channel` capability; on `notifications/initialized` it POSTs `/register` to the daemon and starts long-polling `/recv?instance_id=…`. When the long-poll resolves with text, the plugin emits `notifications/claude/channel` and Claude Code injects it into the session.
+2. **Central registry (`lib/registry.js`).** Loopback HTTP on `127.0.0.1:<port>` (default `9876`, env override `BELFRY_MCP_PORT`). In-memory state: `instance_id → { slug, queue, waiter }` and a `slug → Set<instance_id>` index. `deliver(slug, text)` fans out to every registered instance for that slug; absent registration → drop with a log line.
+3. **Routing inbound Telegram → slug.**
+   1. Primary: Telegram quote-reply. Every outbound belfry message records its `message_id → slug`; replying to one binds the message to that slug.
+   2. Fallback: `/<slug-name> message body` for cold sends with no message to quote.
+   3. Unrouteable messages (no quote, no recognized prefix) → log + ignore. Don't guess.
 
-1. **`Stop` hook → continuation.** Fires when Claude finishes a turn. The hook calls `mcp__belfry__drain_inbox(slug)`; if non-empty, returns `{"decision": "block", "reason": "<reply text>"}`. Claude Code resumes as if the user typed `<reply text>` at the prompt.
-2. **`PreToolUse` hook → interrupt-and-replace.** Fires before each tool call. Drains a separate "interrupt" inbox; if non-empty, returns `{"decision": "block", "reason": "<correction>"}`. Stops the tool and feeds the correction back as user feedback. Latency = "until the next tool call or Stop." Pure cancel is the degenerate case ("stop, wait a sec").
-3. **`Notification` hook → permission answer** (later phase). Same drain pattern, returns the reply as the answer to a permission prompt.
+**Session ↔ slug binding.** belfry-mcp derives its own slug at startup via `lib/slug.js` (env `CLAUDELIKE_BAR_NAME` → `~/.claude/claudelike-bar-paths.json` → cwd basename) and reports it on register. The daemon never has to guess which session a slug refers to.
 
-**Inbox semantics.**
-1. Multiple replies for one slug between drains **concatenate** into a single prompt (separator: blank line). They're treated as one thought sent in pieces.
-2. Continuation inbox and interrupt inbox are separate queues per slug.
-3. Drain is destructive — once a hook reads it, it's gone. No re-delivery.
-
-**Routing inbound Telegram → slug.**
-1. Primary: Telegram quote-reply. Every outbound belfry message records its `message_id → slug`; replying to one binds the message to that slug.
-2. Fallback: `/<slug-name> message body` for cold sends with no message to quote.
-3. Unrouteable messages (no quote, no recognized prefix) → log + ignore. Don't guess.
-
-**Session ↔ slug binding.** Sessions identify themselves by **cwd basename → slug**, matching claudelike-bar's existing convention. Hooks pass `$CLAUDE_PROJECT_DIR` (or equivalent) when calling the MCP; the MCP derives slug server-side. No per-project env wiring required.
-
-**MCP transport.** HTTP on `127.0.0.1:<port>` (default `9876`, env override `BELFRY_MCP_PORT`). **Never stdio** — the Telegram poller is consume-once and inbox state is shared across sessions, so a single long-running daemon is forced. Loopback-only binding means no auth.
+**Why this works for active and idle sessions.** The MCP transport is alive for the entire lifetime of the session — active, mid-tool-call, idle waiting for input, all the same. There is no "session is between turns, the inbox can't drain" case (the v1 Stop-hook problem) and no "session has no terminal, spawn a parallel one" case (the v1 spawn problem). The plugin is *in* the session; the channel notification is the same path the user's keyboard would go through.
 
 ## Subscription config (`~/.claude/belfry.jsonc`)
 

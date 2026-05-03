@@ -1,0 +1,240 @@
+#!/usr/bin/env node
+/**
+ * belfry-mcp — per-session MCP plugin.
+ *
+ * One process per Claude Code session that wants to receive Telegram replies.
+ * Communicates with its parent claude over stdio JSON-RPC (standard MCP) and
+ * with the central belfry daemon over HTTP loopback.
+ *
+ * Lifecycle:
+ *   1. claude spawns us; we read MCP `initialize` from stdin, respond with
+ *      `claude/channel` capability declared (matches plugin:telegram).
+ *   2. After client signals `notifications/initialized`, we POST /register to
+ *      the daemon: { instance_id, slug, cwd, pid }. Slug is derived the same
+ *      way the existing watcher does it (env CLAUDELIKE_BAR_NAME → path index
+ *      → cwd basename).
+ *   3. We long-poll the daemon's GET /recv?instance_id=… loop. Whenever it
+ *      returns text, we emit `notifications/claude/channel` over stdio with
+ *      that text as `params.content`. Claude Code injects it as user input.
+ *   4. On stdin EOF (client disconnect) or signals, we POST /unregister and
+ *      exit cleanly.
+ *
+ * Transport: line-delimited JSON-RPC over stdio. Hand-rolled to honor the
+ * project's no-SDK rule. Spec compliance is minimal — we respond to
+ * `initialize` and `tools/list`, refuse everything else, and proactively
+ * push channel notifications. That's all the channel role needs.
+ */
+
+import { fileURLToPath } from 'node:url';
+import { deriveSlug } from '../lib/slug.js';
+
+const DAEMON_BASE = (process.env.BELFRY_MCP_BASE || 'http://127.0.0.1:9876').replace(/\/$/, '');
+const RECV_TIMEOUT_MS = 30_000;
+const RECONNECT_BACKOFF_MS = 2_000;
+
+const cwd = process.cwd();
+const slug = deriveSlug({ cwd, env: process.env });
+const instanceId = `${process.pid}-${Date.now().toString(36)}`;
+
+let registered = false;
+let shuttingDown = false;
+let recvAbort = null;
+
+function log(msg) {
+  process.stderr.write(`belfry-mcp ${slug}[${instanceId}]: ${msg}\n`);
+}
+
+function send(msg) {
+  process.stdout.write(JSON.stringify(msg) + '\n');
+}
+
+function respond(id, result) {
+  send({ jsonrpc: '2.0', id, result });
+}
+
+function respondError(id, code, message) {
+  send({ jsonrpc: '2.0', id, error: { code, message } });
+}
+
+function handleMessage(msg) {
+  if (msg.method === 'initialize') {
+    respond(msg.id, {
+      protocolVersion: msg.params?.protocolVersion ?? '2024-11-05',
+      serverInfo: { name: 'belfry-mcp', version: '0.2.0' },
+      capabilities: {
+        // Same shape plugin:telegram declares — Claude Code recognizes this
+        // and accepts our `notifications/claude/channel` injections.
+        'claude/channel': {},
+      },
+    });
+    return;
+  }
+  if (msg.method === 'notifications/initialized') {
+    // Client is ready to receive notifications. Register and start the recv loop.
+    register().catch((err) => log(`register error: ${err.message}`));
+    return;
+  }
+  if (msg.method === 'tools/list') {
+    respond(msg.id, { tools: [] });
+    return;
+  }
+  if (msg.method === 'resources/list') {
+    respond(msg.id, { resources: [] });
+    return;
+  }
+  if (msg.method === 'prompts/list') {
+    respond(msg.id, { prompts: [] });
+    return;
+  }
+  if (msg.method === 'shutdown') {
+    respond(msg.id, {});
+    return;
+  }
+  if (msg.id !== undefined) {
+    respondError(msg.id, -32601, `method not found: ${msg.method}`);
+  }
+}
+
+async function register() {
+  if (registered) return;
+  try {
+    const res = await fetch(`${DAEMON_BASE}/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instance_id: instanceId, slug, cwd, pid: process.pid }),
+    });
+    if (!res.ok) {
+      log(`register failed: HTTP ${res.status}`);
+      scheduleRetry(register);
+      return;
+    }
+    registered = true;
+    log('registered with daemon');
+    recvLoop().catch((err) => log(`recv loop crashed: ${err.message}`));
+  } catch (err) {
+    log(`register fetch error: ${err.message}`);
+    scheduleRetry(register);
+  }
+}
+
+function scheduleRetry(fn) {
+  if (shuttingDown) return;
+  setTimeout(() => fn(), RECONNECT_BACKOFF_MS).unref();
+}
+
+async function recvLoop() {
+  while (!shuttingDown) {
+    recvAbort = new AbortController();
+    let res;
+    try {
+      const url = `${DAEMON_BASE}/recv?instance_id=${encodeURIComponent(instanceId)}`;
+      res = await fetch(url, { signal: recvAbort.signal });
+    } catch (err) {
+      if (shuttingDown) return;
+      log(`recv error: ${err.message} — backing off`);
+      await sleep(RECONNECT_BACKOFF_MS);
+      continue;
+    }
+    if (res.status === 204) {
+      // Long-poll timed out with nothing in queue. Loop immediately.
+      continue;
+    }
+    if (res.status === 404) {
+      // Daemon doesn't know us — re-register.
+      log('daemon lost our instance — re-registering');
+      registered = false;
+      await sleep(RECONNECT_BACKOFF_MS);
+      await register();
+      return; // register() restarts the loop
+    }
+    if (!res.ok) {
+      log(`recv HTTP ${res.status} — backing off`);
+      await sleep(RECONNECT_BACKOFF_MS);
+      continue;
+    }
+    let body;
+    try {
+      body = await res.json();
+    } catch (err) {
+      log(`recv body parse error: ${err.message}`);
+      continue;
+    }
+    if (typeof body?.text === 'string' && body.text.length > 0) {
+      injectChannelMessage(body.text);
+    }
+  }
+}
+
+function injectChannelMessage(text) {
+  // Mirrors the params shape plugin:telegram emits. The `meta` block tells
+  // Claude where this came from so it can mention "via belfry" if asked.
+  send({
+    jsonrpc: '2.0',
+    method: 'notifications/claude/channel',
+    params: {
+      content: text,
+      meta: {
+        source: 'belfry',
+        slug,
+        ts: new Date().toISOString(),
+      },
+    },
+  });
+}
+
+let stdinBuf = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  stdinBuf += chunk;
+  while (true) {
+    const nl = stdinBuf.indexOf('\n');
+    if (nl < 0) break;
+    const line = stdinBuf.slice(0, nl).trim();
+    stdinBuf = stdinBuf.slice(nl + 1);
+    if (!line) continue;
+    let msg;
+    try {
+      msg = JSON.parse(line);
+    } catch (err) {
+      log(`parse error on stdin: ${err.message}`);
+      continue;
+    }
+    try {
+      handleMessage(msg);
+    } catch (err) {
+      log(`handler error: ${err.stack ?? err.message}`);
+    }
+  }
+});
+
+process.stdin.on('end', () => shutdown('stdin-end'));
+process.stdin.on('close', () => shutdown('stdin-close'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+async function shutdown(reason) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log(`shutting down (${reason})`);
+  if (recvAbort) {
+    try { recvAbort.abort(); } catch {}
+  }
+  if (registered) {
+    try {
+      await fetch(`${DAEMON_BASE}/unregister`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ instance_id: instanceId }),
+      });
+    } catch {}
+  }
+  process.exit(0);
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  log(`starting (cwd=${cwd}, daemon=${DAEMON_BASE})`);
+}

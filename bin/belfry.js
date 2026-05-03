@@ -6,9 +6,8 @@ import { StatusWatcher } from '../lib/watcher.js';
 import { Throttle } from '../lib/throttle.js';
 import { compose } from '../lib/composer.js';
 import { sendMessage } from '../lib/telegram.js';
-import { Inbox } from '../lib/inbox.js';
 import { ReplyTracker } from '../lib/reply-tracker.js';
-import { McpServer } from '../lib/mcp-server.js';
+import { Registry } from '../lib/registry.js';
 import { Poller } from '../lib/poller.js';
 
 function log(msg) {
@@ -52,20 +51,19 @@ async function main() {
   }
   log(`telegram bot configured (chat ${chatId}${forumTopicId ? `, topic ${forumTopicId}` : ''})`);
 
-  // Inbound: shared inbox + per-message-id reply tracker, served over loopback HTTP.
-  const inbox = new Inbox();
+  // Inbound: per-session belfry-mcp plugins register here. The poller routes
+  // each Telegram reply to the slug's registered plugin(s) which inject the
+  // text via MCP `notifications/claude/channel` — same path plugin:telegram
+  // uses, just with multi-session fan-out.
   const replyTracker = new ReplyTracker();
-  const knownSlugs = new Set(Object.keys(config.subscriptions));
-
-  const mcp = new McpServer({ inbox, port: mcpPort, log });
-  await mcp.start();
+  const registry = new Registry({ port: mcpPort, log });
+  await registry.start();
 
   const poller = new Poller({
     botToken,
     expectedChatId: Number(chatId),
     replyTracker,
-    knownSlugs,
-    inbox,
+    target: registry,
     log,
   });
   poller.start();
@@ -113,7 +111,7 @@ async function main() {
     log(`received ${signal} — shutting down`);
     throttle.clearAll();
     await poller.stop();
-    await mcp.stop();
+    await registry.stop();
     await watcher.stop();
     process.exit(0);
   };

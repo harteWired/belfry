@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "belfry": {
+      "command": "node",
+      "args": ["/workspace/projects/belfry/bin/belfry-mcp.js"]
+    }
+  }
+}

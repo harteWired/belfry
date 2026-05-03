@@ -1,0 +1,26 @@
+{
+  "name": "belfry",
+  "version": "0.1.0",
+  "description": "Outbound Telegram relay for Claude Code terminal status — reads claudelike-bar's status JSONs and pings your phone with mobile-friendly per-terminal context.",
+  "type": "module",
+  "private": true,
+  "main": "bin/belfry.js",
+  "bin": {
+    "belfry": "bin/belfry.js"
+  },
+  "scripts": {
+    "start": "node bin/belfry.js",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/harteWired/belfry.git"
+  },
+  "license": "UNLICENSED"
+}

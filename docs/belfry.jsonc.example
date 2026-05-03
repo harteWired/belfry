@@ -1,0 +1,31 @@
+// Belfry subscription config. Copy this to ~/.claude/belfry.jsonc and edit.
+//
+// Per-slug opt-in. Slugs not listed here are silently ignored — no spam from
+// projects you didn't subscribe.
+{
+  "subscriptions": {
+    // Slug = the project name claudelike-bar uses (matches the filename in
+    // /tmp/claude-dashboard/<slug>.json). Run `ls /tmp/claude-dashboard/` to
+    // see what's currently active.
+    "life-planner": {
+      "events": ["ready", "error"]
+    },
+    "financial-planner": {
+      "events": ["ready"]
+    }
+  },
+
+  // Throttle per slug (ms). Default 30000. After belfry sends a message for
+  // a slug, further events are dropped until this window expires.
+  "throttleMs": 30000,
+
+  // Coalesce window (ms). Default 5000. Multiple events for the same slug
+  // within this window collapse into one send describing the latest state.
+  // Stops fan-out bursts (e.g. 10 rapid subagent permission prompts) from
+  // each producing a separate Telegram message.
+  "coalesceMs": 5000,
+
+  // Truncation caps for the prompt + response in each message (chars).
+  "promptCap": 200,
+  "responseCap": 400
+}

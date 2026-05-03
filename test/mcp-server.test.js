@@ -1,7 +1,27 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { request as httpRequest } from 'node:http';
 import { McpServer } from '../lib/mcp-server.js';
 import { Inbox } from '../lib/inbox.js';
+
+// fetch() forbids overriding the Host header (it's in the spec's forbidden
+// list). For the rebinding-guard tests we drop down to node:http, which
+// happily sets whatever Host the caller asks for.
+function rawHttpRequest({ port, headers, body }) {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest(
+      { host: '127.0.0.1', port, method: 'POST', path: '/', headers },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString() }));
+      },
+    );
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
 
 let server;
 let inbox;
@@ -147,4 +167,41 @@ test('GET request returns 405', async () => {
 test('binds to loopback only', async () => {
   const addr = server.server.address();
   assert.equal(addr.address, '127.0.0.1');
+});
+
+test('rejects requests with non-loopback Host header (DNS rebinding guard)', async () => {
+  const addr = server.server.address();
+  const res = await fetch(baseUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      // Simulate a DNS-rebinding browser request: TCP goes to 127.0.0.1
+      // but the Host header carries the attacker's hostname.
+      'host': `attacker.com:${addr.port}`,
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'initialize' }),
+  });
+  assert.equal(res.status, 403);
+});
+
+test('accepts localhost as Host header', async () => {
+  const addr = server.server.address();
+  // Connect to the same socket but with Host: localhost
+  const res = await fetch(`http://127.0.0.1:${addr.port}/`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'host': `localhost:${addr.port}` },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 100, method: 'initialize' }),
+  });
+  assert.equal(res.status, 200);
+});
+
+test('rejects POST without application/json content-type (CORS rebinding guard)', async () => {
+  const res = await fetch(baseUrl, {
+    method: 'POST',
+    headers: {
+      'content-type': 'text/plain',
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 101, method: 'initialize' }),
+  });
+  assert.equal(res.status, 415);
 });

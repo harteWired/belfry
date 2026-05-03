@@ -117,3 +117,50 @@ test('telegram returning ok=false throws', async () => {
   });
   await assert.rejects(poller.tick(), /ok/);
 });
+
+test('primeOffset advances offset past the last buffered update', async () => {
+  const inbox = new Inbox();
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker: new ReplyTracker(),
+    knownSlugs: new Set(),
+    inbox,
+    fetchFn: async () => ({
+      ok: true,
+      json: async () => ({ ok: true, result: [{ update_id: 1234, message: { chat: { id: CHAT }, text: 'old' } }] }),
+    }),
+  });
+  await poller.primeOffset();
+  assert.equal(poller.offset, 1235);
+  // Crucially, the priming call must NOT have routed the stale message into the inbox.
+  assert.equal(inbox.peek('any-slug', 'continuation'), null);
+});
+
+test('primeOffset is a no-op when backlog is empty', async () => {
+  const inbox = new Inbox();
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker: new ReplyTracker(),
+    knownSlugs: new Set(),
+    inbox,
+    fetchFn: async () => ({ ok: true, json: async () => ({ ok: true, result: [] }) }),
+  });
+  await poller.primeOffset();
+  assert.equal(poller.offset, 0);
+});
+
+test('primeOffset swallows errors (best-effort)', async () => {
+  const inbox = new Inbox();
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker: new ReplyTracker(),
+    knownSlugs: new Set(),
+    inbox,
+    fetchFn: async () => { throw new Error('network down'); },
+  });
+  await poller.primeOffset();
+  assert.equal(poller.offset, 0, 'priming failure must not throw or change offset');
+});

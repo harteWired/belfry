@@ -1,5 +1,7 @@
 # belfry
 
+> Also follow /workspace/CLAUDE.md for global workspace conventions.
+
 Outbound Telegram relay for Claude Code terminal status. Watches [claudelike-bar](https://github.com/harteWired/claudelike-bar)'s `/tmp/claude-dashboard/<slug>.json` files, debounces, composes mobile-friendly messages, posts to a Telegram bot.
 
 Outbound only. Bidirectional chat with a specific Claude session is covered by Anthropic's official Telegram channel plugin — belfry exists for the multi-terminal *fan-out* case those plugins don't cover.

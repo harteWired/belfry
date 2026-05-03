@@ -171,8 +171,8 @@ test('binds to loopback only', async () => {
 
 test('rejects requests with non-loopback Host header (DNS rebinding guard)', async () => {
   const addr = server.server.address();
-  const res = await fetch(baseUrl, {
-    method: 'POST',
+  const res = await rawHttpRequest({
+    port: addr.port,
     headers: {
       'content-type': 'application/json',
       // Simulate a DNS-rebinding browser request: TCP goes to 127.0.0.1
@@ -187,9 +187,19 @@ test('rejects requests with non-loopback Host header (DNS rebinding guard)', asy
 test('accepts localhost as Host header', async () => {
   const addr = server.server.address();
   // Connect to the same socket but with Host: localhost
-  const res = await fetch(`http://127.0.0.1:${addr.port}/`, {
-    method: 'POST',
+  const res = await rawHttpRequest({
+    port: addr.port,
     headers: { 'content-type': 'application/json', 'host': `localhost:${addr.port}` },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 100, method: 'initialize' }),
+  });
+  assert.equal(res.status, 200);
+});
+
+test('accepts 127.0.0.1 as Host header', async () => {
+  const addr = server.server.address();
+  const res = await rawHttpRequest({
+    port: addr.port,
+    headers: { 'content-type': 'application/json', 'host': `127.0.0.1:${addr.port}` },
     body: JSON.stringify({ jsonrpc: '2.0', id: 100, method: 'initialize' }),
   });
   assert.equal(res.status, 200);

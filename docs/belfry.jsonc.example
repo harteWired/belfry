@@ -12,6 +12,15 @@
     },
     "financial-planner": {
       "events": ["ready"]
+    },
+    // Optional: explicit cwd. Used to (a) resolve the most-recent session id
+    // under ~/.claude/projects/<encoded-cwd>/ and (b) as the working dir for
+    // `claude --resume <id> --print "<reply>"` when a Telegram reply lands
+    // on an idle session. Defaults to /workspace/projects/<slug>; override
+    // when the slug name and the project directory don't match.
+    "vault-direct": {
+      "events": ["ready"],
+      "cwd": "/workspace/projects/vault-direct"
     }
   },
 

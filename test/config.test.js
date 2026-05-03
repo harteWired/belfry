@@ -59,6 +59,28 @@ test('drops invalid event names', () => {
   fs.unlinkSync(p);
 });
 
+test('subscription cwd defaults to /workspace/projects/<slug>', () => {
+  const p = tmp(`{
+    "subscriptions": {
+      "belfry": { "events": ["ready"] }
+    }
+  }`);
+  const cfg = loadConfig(p);
+  assert.equal(cfg.subscriptions.belfry.cwd, '/workspace/projects/belfry');
+  fs.unlinkSync(p);
+});
+
+test('subscription cwd can be overridden explicitly', () => {
+  const p = tmp(`{
+    "subscriptions": {
+      "x": { "events": ["ready"], "cwd": "/some/custom/path" }
+    }
+  }`);
+  const cfg = loadConfig(p);
+  assert.equal(cfg.subscriptions.x.cwd, '/some/custom/path');
+  fs.unlinkSync(p);
+});
+
 test('isSubscribed matches slug + event', () => {
   const cfg = {
     subscriptions: { 'a': { events: ['ready', 'error'] } },

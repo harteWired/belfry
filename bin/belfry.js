@@ -10,6 +10,9 @@ import { Inbox } from '../lib/inbox.js';
 import { ReplyTracker } from '../lib/reply-tracker.js';
 import { McpServer } from '../lib/mcp-server.js';
 import { Poller } from '../lib/poller.js';
+import { Dispatcher } from '../lib/dispatcher.js';
+import { runClaude } from '../lib/runner.js';
+import { resolveSession } from '../lib/session-resolver.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -60,12 +63,26 @@ async function main() {
   const mcp = new McpServer({ inbox, port: mcpPort, log });
   await mcp.start();
 
+  // Dispatcher: smart push() that picks inbox-vs-spawn based on dashboard
+  // status. Quacks like Inbox so Poller doesn't know which path it took.
+  const dispatcher = new Dispatcher({
+    inbox,
+    runner: runClaude,
+    sessionResolver: resolveSession,
+    subscriptions: config.subscriptions,
+    sendReply: async ({ slug, text }) => {
+      const result = await sendMessage({ botToken, chatId, text, forumTopicId });
+      if (result?.message_id) replyTracker.record(result.message_id, slug);
+    },
+    log,
+  });
+
   const poller = new Poller({
     botToken,
     expectedChatId: Number(chatId),
     replyTracker,
     knownSlugs,
-    inbox,
+    inbox: dispatcher,
     log,
   });
   poller.start();

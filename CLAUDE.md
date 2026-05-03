@@ -25,7 +25,7 @@ It isn't:
 1. A general-purpose webhook router — Telegram is the only target.
 2. A retry / circuit-breaker framework — per-slug throttle covers the spam case; transient API failures are logged and dropped.
 3. A daemon you run on a remote host — MCP binds to loopback only; assume the same machine as Claude Code.
-4. A multiplexer or keystroke-injection shim — the user's terminal stays sovereign. Inbound replies enter sessions only via Claude Code hook return values (see "Bidirectional design" below).
+4. A multiplexer / GUI / keystroke-injection shim into a *running* terminal. Belfry never types into your active terminal. For idle sessions it spawns a parallel `claude --resume` against the same on-disk transcript — that's a programmatic Claude Code invocation, not a hijack of the user's terminal.
 
 ## Architecture
 
@@ -63,6 +63,9 @@ lib/router.js          — incoming Telegram update → (slug, queue, text)
 lib/poller.js          — Telegram getUpdates long-poll loop
 lib/mcp-server.js      — JSON-RPC over HTTP on 127.0.0.1, drain/peek tools
 lib/slug.js            — slug derivation (mirrors claudelike-bar's rules)
+lib/dispatcher.js      — picks inbox-vs-spawn based on dashboard status
+lib/session-resolver.js — find most-recent session uuid for a slug's cwd
+lib/runner.js          — spawn `claude --resume <id> --print …` for idle drives
 hooks/stop-hook.js     — installable Stop hook (Phase 1)
 test/                  — node --test
 ```
@@ -71,11 +74,17 @@ Phase 2 will add `hooks/pre-tool-use-hook.js` (interrupt-and-replace) and an int
 
 ## Bidirectional design (binding spec for in-progress work)
 
-**Mechanism.** Replies enter sessions only through Claude Code hook return values. No keystroke injection, no terminal multiplexer.
+**Mechanism.** Two paths, picked at dispatch time by `lib/dispatcher.js` based on the slug's current dashboard status (`/tmp/claude-dashboard/<slug>.json`):
 
-1. **`Stop` hook → continuation.** Fires when Claude finishes a turn. The hook calls `mcp__belfry__drain_inbox(slug)`; if non-empty, returns `{"decision": "block", "reason": "<reply text>"}`. Claude Code resumes as if the user typed `<reply text>` at the prompt.
-2. **`PreToolUse` hook → interrupt-and-replace.** Fires before each tool call. Drains a separate "interrupt" inbox; if non-empty, returns `{"decision": "block", "reason": "<correction>"}`. Stops the tool and feeds the correction back as user feedback. Latency = "until the next tool call or Stop." Pure cancel is the degenerate case ("stop, wait a sec").
-3. **`Notification` hook → permission answer** (later phase). Same drain pattern, returns the reply as the answer to a permission prompt.
+1. **Active session (status: working/tool_end/notification/etc.) → hook drain.** The reply lands in the in-memory inbox; the next hook firing on that session drains it.
+   - `Stop` hook → continuation. Returns `{"decision":"block","reason":"<reply>"}` so Claude resumes as if the user typed `<reply>`.
+   - `PreToolUse` hook → interrupt-and-replace (Phase 2, #3). Drains a separate `interrupt` queue; returns the same shape to short-circuit the tool with user feedback.
+   - `Notification` hook → permission answer (Phase 3, #4). Same drain pattern.
+2. **Idle session (status: ready / missing JSON / error) → spawn-and-relay.** The dispatcher resolves the slug's most-recent session UUID via `lib/session-resolver.js` (newest `.jsonl` mtime under `~/.claude/projects/<encoded-cwd>/`) and runs `claude --resume <id> --print "<reply>"` from the slug's cwd via `lib/runner.js`. Stdout is sent back to the same Telegram chat so the user sees the answer on their phone without alt-tabbing to the terminal. The on-disk JSONL is shared with the user's terminal session — when they next interact, the spawned turn is already in history.
+
+Idle = `status === 'ready'` OR `status === 'error'` OR no dashboard JSON. Anything else is treated as active (the session is mid-conversation; a parallel spawn would race the same JSONL).
+
+**Why two paths.** Spawning into an active session creates a JSONL race; the hook drain avoids that by piggybacking on the existing turn. Hook drain into an idle session is a no-op forever; spawning lights it back up. Each path covers what the other can't.
 
 **Inbox semantics.**
 1. Multiple replies for one slug between drains **concatenate** into a single prompt (separator: blank line). They're treated as one thought sent in pieces.

@@ -1,7 +1,4 @@
 #!/usr/bin/env node
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import * as os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import { loadConfig, isSubscribed } from '../lib/config.js';
@@ -9,6 +6,10 @@ import { StatusWatcher } from '../lib/watcher.js';
 import { Throttle } from '../lib/throttle.js';
 import { compose } from '../lib/composer.js';
 import { sendMessage } from '../lib/telegram.js';
+import { Inbox } from '../lib/inbox.js';
+import { ReplyTracker } from '../lib/reply-tracker.js';
+import { McpServer } from '../lib/mcp-server.js';
+import { Poller } from '../lib/poller.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -43,6 +44,7 @@ async function main() {
   const botToken = (process.env.BELFRY_TOKEN ?? '').trim();
   const chatId = (process.env.BELFRY_CHAT_ID ?? '').trim();
   const forumTopicId = (process.env.BELFRY_FORUM_TOPIC_ID ?? '').trim();
+  const mcpPort = Number(process.env.BELFRY_MCP_PORT || 9876);
   if (!botToken || !chatId) {
     log('missing BELFRY_TOKEN and/or BELFRY_CHAT_ID env vars — relay disabled');
     log('see README.md for setup. Common pattern: a launcher script reads from your secret store and exec-s belfry with the env vars set.');
@@ -50,6 +52,26 @@ async function main() {
   }
   log(`telegram bot configured (chat ${chatId}${forumTopicId ? `, topic ${forumTopicId}` : ''})`);
 
+  // Inbound: shared inbox + per-message-id reply tracker, served over loopback HTTP.
+  const inbox = new Inbox();
+  const replyTracker = new ReplyTracker();
+  const knownSlugs = new Set(Object.keys(config.subscriptions));
+
+  const mcp = new McpServer({ inbox, port: mcpPort, log });
+  await mcp.start();
+
+  const poller = new Poller({
+    botToken,
+    expectedChatId: Number(chatId),
+    replyTracker,
+    knownSlugs,
+    inbox,
+    log,
+  });
+  poller.start();
+  log(`poller started (chat ${chatId})`);
+
+  // Outbound: chokidar watcher → throttle → composer → Telegram.
   const throttle = new Throttle({
     coalesceMs: config.coalesceMs,
     throttleMs: config.throttleMs,
@@ -62,10 +84,12 @@ async function main() {
         displayName: event.statusFile?.displayName ?? slug,
         promptCap: config.promptCap,
         responseCap: config.responseCap,
+        replyFooter: true,
       });
       try {
-        await sendMessage({ botToken, chatId, text, forumTopicId });
-        log(`sent ${slug}: ${event.status} (${text.length} chars)`);
+        const result = await sendMessage({ botToken, chatId, text, forumTopicId });
+        if (result?.message_id) replyTracker.record(result.message_id, slug);
+        log(`sent ${slug}: ${event.status} (${text.length} chars, msg ${result?.message_id})`);
       } catch (err) {
         log(`send failed for ${slug}: ${err.message}`);
       }
@@ -88,6 +112,8 @@ async function main() {
   const shutdown = async (signal) => {
     log(`received ${signal} — shutting down`);
     throttle.clearAll();
+    await poller.stop();
+    await mcp.stop();
     await watcher.stop();
     process.exit(0);
   };

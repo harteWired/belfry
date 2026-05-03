@@ -54,13 +54,20 @@ Single belfry process owns: the chokidar watcher, the Telegram poller, the per-s
 bin/belfry.js          — entry point + daemon loop
 lib/watcher.js         — chokidar watcher on /tmp/claude-dashboard/*.json
 lib/composer.js        — 3-line mobile-friendly message builder
-lib/telegram.js        — Bot API HTTP helper (sendMessage; getUpdates pending)
+lib/telegram.js        — Bot API HTTP helper (sendMessage)
 lib/throttle.js        — per-slug rate limiting + coalesce
 lib/config.js          — load + validate ~/.claude/belfry.jsonc
+lib/inbox.js           — per-slug inbox (continuation + interrupt queues)
+lib/reply-tracker.js   — outbound message_id → slug LRU
+lib/router.js          — incoming Telegram update → (slug, queue, text)
+lib/poller.js          — Telegram getUpdates long-poll loop
+lib/mcp-server.js      — JSON-RPC over HTTP on 127.0.0.1, drain/peek tools
+lib/slug.js            — slug derivation (mirrors claudelike-bar's rules)
+hooks/stop-hook.js     — installable Stop hook (Phase 1)
 test/                  — node --test
 ```
 
-Phase 1+ adds (planned, not yet present): `lib/inbox.js`, `lib/poller.js`, `lib/mcp-server.js`, `lib/router.js`, plus hook scripts in `hooks/`.
+Phase 2 will add `hooks/pre-tool-use-hook.js` (interrupt-and-replace) and an interrupt-routing branch in `lib/router.js`. Phase 3 adds `hooks/notification-hook.js`.
 
 ## Bidirectional design (binding spec for in-progress work)
 
@@ -98,7 +105,11 @@ When inbound lands, outbound messages need a footer indicating the message is re
 
 ## Dependencies on claudelike-bar
 
-belfry consumes `last_response` (when present) for the "Claude: …" line in the composer. The field is documented as added in claudelike-bar v0.18.1+. **Reality check:** the version installed in this workspace (and likely most users') is v0.17.0, and live JSONs do not carry `last_response`. The composer degrades gracefully (skips the line) but it never renders in practice today. Either bump the upstream dep or drop the line from the docs.
+belfry currently reads status JSONs that [claudelike-bar](https://github.com/harteWired/claudelike-bar)'s hook writes to `/tmp/claude-dashboard/<slug>.json`, and `lib/slug.js` mirrors claudelike-bar's slug derivation exactly (env → path index → cwd basename) so the hook-side slug matches the JSON-side slug. This makes claudelike-bar a hard install dep today.
+
+**Direction (tracked in #6):** belfry should run standalone. The plan is to vendor a minimal hook inside belfry that writes the same JSON shape — claudelike-bar becomes an optional integration that adds the status bar UI on top, but belfry alone is enough for the Telegram bridge. Until that ships, treat the JSON contract as "what belfry expects to read" and verify against actual files in `/tmp/claude-dashboard/` rather than upstream docs.
+
+belfry also reads `last_response` (when present) for the "Claude: …" line in the composer. Documented as added in claudelike-bar v0.18.1+, but the version installed in this workspace is v0.17.0 and live JSONs only carry `last_prompt`. The composer degrades gracefully (skips the line) but it never renders today. Tracked in #5.
 
 ## Required env vars
 

@@ -70,3 +70,26 @@ test('error status uses 🚨 emoji', () => {
   });
   assert.match(text, /^🚨/);
 });
+
+test('appends reply footer when replyFooter=true', () => {
+  const text = compose({
+    slug: 'life-planner',
+    status: 'ready',
+    statusFile: { status: 'ready', last_prompt: 'hi' },
+    promptCap: 200,
+    responseCap: 400,
+    replyFooter: true,
+  });
+  assert.match(text, /↩ Reply to drive$/);
+});
+
+test('omits reply footer by default', () => {
+  const text = compose({
+    slug: 'x',
+    status: 'ready',
+    statusFile: { status: 'ready' },
+    promptCap: 200,
+    responseCap: 400,
+  });
+  assert.doesNotMatch(text, /Reply/);
+});

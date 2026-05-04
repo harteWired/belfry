@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 
 import { loadConfig, isSubscribed } from '../lib/config.js';
 import { StatusWatcher } from '../lib/watcher.js';
@@ -55,8 +59,21 @@ async function main() {
   // each Telegram reply to the slug's registered plugin(s) which inject the
   // text via MCP `notifications/claude/channel` — same path plugin:telegram
   // uses, just with multi-session fan-out.
-  const replyTracker = new ReplyTracker();
-  const registry = new Registry({ port: mcpPort, log });
+  const stateDir =
+    (process.env.BELFRY_STATE_DIR ?? '').trim() ||
+    join(process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state'), 'belfry');
+  const replyTracker = new ReplyTracker({
+    persistPath: join(stateDir, 'reply-tracker.json'),
+    log,
+  });
+
+  // Auth token: random 32-byte hex written 0600 to the state dir. Spokes
+  // read it from the same path. Without this, any local user/process could
+  // /register an arbitrary slug and drain another session's Telegram replies.
+  const tokenPath = join(stateDir, 'registry.token');
+  const authToken = ensureAuthToken(tokenPath);
+
+  const registry = new Registry({ port: mcpPort, log, authToken });
   await registry.start();
 
   const poller = new Poller({
@@ -117,6 +134,24 @@ async function main() {
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
+}
+
+/**
+ * Read or generate the registry auth token. Persisted so daemon restarts
+ * don't break already-running spokes — they cache the token at startup.
+ */
+function ensureAuthToken(tokenPath) {
+  try {
+    const existing = readFileSync(tokenPath, 'utf8').trim();
+    if (existing.length > 0) return existing;
+  } catch (err) {
+    if (err.code !== 'ENOENT') log(`auth token read failed (${err.message}) — regenerating`);
+  }
+  const token = randomBytes(32).toString('hex');
+  mkdirSync(dirname(tokenPath), { recursive: true, mode: 0o700 });
+  writeFileSync(tokenPath, token, { mode: 0o600 });
+  log(`auth token written to ${tokenPath}`);
+  return token;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

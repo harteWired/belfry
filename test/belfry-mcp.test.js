@@ -76,8 +76,8 @@ test('plugin responds to initialize with claude/channel capability', async () =>
   const resp = await p.waitFor((m) => m.id === 1);
   assert.equal(resp.jsonrpc, '2.0');
   assert.ok(resp.result);
-  assert.ok(resp.result.capabilities['claude/channel']);
-  assert.equal(resp.result.serverInfo.name, 'belfry-mcp');
+  assert.ok(resp.result.capabilities.experimental?.['claude/channel']);
+  assert.equal(resp.result.serverInfo.name, 'belfry');
   await p.stop();
 });
 

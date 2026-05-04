@@ -19,6 +19,11 @@
  *   4. On stdin EOF (client disconnect) or signals, we POST /unregister and
  *      exit cleanly.
  *
+ * Auth: the daemon writes a random token to ~/.local/state/belfry/registry.token
+ * at startup (0600). We read it once and send it as `Authorization: Bearer …`
+ * on every request. Without this, any local process could register and drain
+ * another session's queue.
+ *
  * Transport: line-delimited JSON-RPC over stdio. Hand-rolled to honor the
  * project's no-SDK rule. Spec compliance is minimal — we respond to
  * `initialize` and `tools/list`, refuse everything else, and proactively
@@ -26,19 +31,44 @@
  */
 
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { deriveSlug } from '../lib/slug.js';
 
 const DAEMON_BASE = (process.env.BELFRY_MCP_BASE || 'http://127.0.0.1:9876').replace(/\/$/, '');
 const RECV_TIMEOUT_MS = 30_000;
 const RECONNECT_BACKOFF_MS = 2_000;
+const MIN_RECV_LOOP_MS = 1_000;
 
 const cwd = process.cwd();
 const slug = deriveSlug({ cwd, env: process.env });
-const instanceId = `${process.pid}-${Date.now().toString(36)}`;
+const instanceId = randomUUID();
 
 let registered = false;
+let registerInFlight = false;
 let shuttingDown = false;
 let recvAbort = null;
+
+const stateDir =
+  (process.env.BELFRY_STATE_DIR ?? '').trim() ||
+  join(process.env.XDG_STATE_HOME || join(homedir(), '.local', 'state'), 'belfry');
+const tokenPath = join(stateDir, 'registry.token');
+
+function loadToken() {
+  try {
+    const t = readFileSync(tokenPath, 'utf8').trim();
+    return t.length > 0 ? t : null;
+  } catch {
+    return null;
+  }
+}
+const authToken = loadToken();
+
+function authHeaders() {
+  return authToken ? { authorization: `Bearer ${authToken}` } : {};
+}
 
 function log(msg) {
   process.stderr.write(`belfry-mcp ${slug}[${instanceId}]: ${msg}\n`);
@@ -60,12 +90,19 @@ function handleMessage(msg) {
   if (msg.method === 'initialize') {
     respond(msg.id, {
       protocolVersion: msg.params?.protocolVersion ?? '2024-11-05',
-      serverInfo: { name: 'belfry-mcp', version: '0.2.0' },
+      serverInfo: { name: 'belfry', version: '0.2.0' },
       capabilities: {
-        // Same shape plugin:telegram declares — Claude Code recognizes this
-        // and accepts our `notifications/claude/channel` injections.
-        'claude/channel': {},
+        tools: {},
+        experimental: {
+          // `claude/channel` is an experimental capability — it must live
+          // under `experimental`, not at the top level, or Claude Code
+          // silently drops every `notifications/claude/channel` we emit.
+          // Mirrors plugin:telegram's server.ts.
+          'claude/channel': {},
+        },
       },
+      instructions:
+        'Messages routed via belfry arrive as user input. They originate from Telegram replies the user quoted to a belfry message. Reply normally — outbound is handled by the daemon watching claudelike-bar status JSONs.',
     });
     return;
   }
@@ -96,11 +133,12 @@ function handleMessage(msg) {
 }
 
 async function register() {
-  if (registered) return;
+  if (registered || registerInFlight) return;
+  registerInFlight = true;
   try {
     const res = await fetch(`${DAEMON_BASE}/register`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ instance_id: instanceId, slug, cwd, pid: process.pid }),
     });
     if (!res.ok) {
@@ -114,6 +152,8 @@ async function register() {
   } catch (err) {
     log(`register fetch error: ${err.message}`);
     scheduleRetry(register);
+  } finally {
+    registerInFlight = false;
   }
 }
 
@@ -124,19 +164,42 @@ function scheduleRetry(fn) {
 
 async function recvLoop() {
   while (!shuttingDown) {
+    const iterStart = Date.now();
     recvAbort = new AbortController();
+    // Compose a per-iteration timeout with the shutdown abort. AbortSignal.any
+    // fires when either signal aborts; we depend on the daemon's 25s server
+    // timeout normally, but RECV_TIMEOUT_MS guards against a wedged daemon
+    // that holds the connection without responding.
+    const timeoutSignal = AbortSignal.timeout(RECV_TIMEOUT_MS);
+    const signal = AbortSignal.any([recvAbort.signal, timeoutSignal]);
     let res;
     try {
       const url = `${DAEMON_BASE}/recv?instance_id=${encodeURIComponent(instanceId)}`;
-      res = await fetch(url, { signal: recvAbort.signal });
+      res = await fetch(url, { signal, headers: authHeaders() });
     } catch (err) {
       if (shuttingDown) return;
+      // TimeoutError, network error, abort — all back off the same way.
       log(`recv error: ${err.message} — backing off`);
       await sleep(RECONNECT_BACKOFF_MS);
       continue;
     }
     if (res.status === 204) {
-      // Long-poll timed out with nothing in queue. Loop immediately.
+      // Long-poll timed out with nothing in queue. Loop, but ensure a floor
+      // so a wedged daemon returning instant 204s can't tight-loop us.
+      const elapsed = Date.now() - iterStart;
+      if (elapsed < MIN_RECV_LOOP_MS) await sleep(MIN_RECV_LOOP_MS - elapsed);
+      continue;
+    }
+    if (res.status === 401) {
+      log('daemon rejected auth — token may have rotated; re-reading');
+      // Best-effort: re-read the token file. If still wrong, back off.
+      const fresh = loadToken();
+      if (fresh && fresh !== authToken) {
+        // Reassign via mutable closure isn't possible — log and exit;
+        // claude will respawn us with a fresh process and re-read.
+        log('token changed on disk — exiting for respawn');
+      }
+      await sleep(RECONNECT_BACKOFF_MS);
       continue;
     }
     if (res.status === 404) {
@@ -156,10 +219,12 @@ async function recvLoop() {
     try {
       body = await res.json();
     } catch (err) {
-      log(`recv body parse error: ${err.message}`);
+      log(`recv body parse error: ${err.message} — backing off`);
+      await sleep(RECONNECT_BACKOFF_MS);
       continue;
     }
     if (typeof body?.text === 'string' && body.text.length > 0) {
+      log(`recv got ${body.text.length} chars — emitting channel notification`);
       injectChannelMessage(body.text);
     }
   }
@@ -223,7 +288,7 @@ async function shutdown(reason) {
     try {
       await fetch(`${DAEMON_BASE}/unregister`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ instance_id: instanceId }),
       });
     } catch {}
@@ -236,5 +301,5 @@ function sleep(ms) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  log(`starting (cwd=${cwd}, daemon=${DAEMON_BASE})`);
+  log(`starting (cwd=${cwd}, daemon=${DAEMON_BASE}, auth=${authToken ? 'on' : 'off'})`);
 }

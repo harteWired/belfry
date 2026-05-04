@@ -17,7 +17,20 @@ Drop a `.mcp.json` at the project root:
 }
 ```
 
-Replace `/absolute/path/to/belfry/` with your checkout. Restart any open Claude Code session in that directory; on next launch the plugin connects to the running daemon and you can drive that session from Telegram.
+Replace `/absolute/path/to/belfry/` with your checkout. Restart any open Claude Code session in that directory **with the channel tag**:
+
+```bash
+claude --channels server:belfry
+```
+
+The `--channels` flag is mandatory. Without it, Claude Code silently drops every channel notification belfry-mcp emits — the daemon will route the reply, the plugin will write the JSON-RPC notification to stdout, and nothing visible will happen in your session. The flag is the security gate that lets an MCP server inject text into the conversation as if you typed it; Claude Code requires explicit per-session opt-in. Combine with whatever other flags you normally use, e.g. `claude --dangerously-skip-permissions --channels server:belfry`.
+
+The tag format is:
+
+- `server:<name>` — for MCP servers configured in `.mcp.json` or `~/.claude/mcp.json` (this is the belfry case, since the server is named `belfry` in the JSON above).
+- `plugin:<name>@<marketplace>` — for plugin-provided channels (e.g. the bundled `plugin:telegram@claude-plugins-official`). Not used by belfry.
+
+You can repeat the flag (`--channels server:belfry --channels plugin:telegram@claude-plugins-official`) to enable both belfry and the official single-session plugin in the same session, though there's rarely a reason to.
 
 ## Global (every project gets it)
 
@@ -26,9 +39,11 @@ If you want every Claude Code session to be drivable, put the same block in `~/.
 ## Verifying
 
 1. Start (or restart) belfry: `/workspace/shared/belfry-launch.sh` (or `BELFRY_TOKEN=… BELFRY_CHAT_ID=… node bin/belfry.js`).
-2. Open a Claude Code session in the configured project.
+2. Open a Claude Code session in the configured project: `claude --channels server:belfry`.
 3. The daemon log should show: `registry: registered <slug> (instance <pid>-<id>, pid <session-pid>)`.
 4. Reply to one of belfry's Telegram pings (or send `/<slug-name> hi`). The reply should appear in your terminal as the next user prompt within ~1 second.
+
+If step 4 silently fails — daemon logs `routed <slug> → 1 instance(s)` but nothing happens in the session — you almost certainly forgot the `--channels server:belfry` flag. The plugin emits the notification correctly, but Claude Code drops it without a visible warning when the channel isn't tagged.
 
 ## What it doesn't do
 

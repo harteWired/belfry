@@ -6,7 +6,10 @@
   "private": true,
   "main": "bin/belfry.js",
   "bin": {
-    "belfry": "bin/belfry.js"
+    "belfry": "bin/belfry.js",
+    "belfry-mcp": "bin/belfry-mcp.js",
+    "belfry-hook": "bin/belfry-hook.js",
+    "belfry-install-hook": "bin/belfry-install-hook.js"
   },
   "scripts": {
     "start": "node bin/belfry.js",

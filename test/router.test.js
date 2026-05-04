@@ -43,7 +43,7 @@ test('quote-reply routes to tracked slug', () => {
     update: update({ text: 'do the thing', replyToId: 42 }),
     ...ctx({ tracked: [[42, 'life-planner']] }),
   });
-  assert.deepEqual(r, { slug: 'life-planner', text: 'do the thing' });
+  assert.deepEqual(r, { slug: 'life-planner', text: 'do the thing', messageId: 99 });
 });
 
 test('quote-reply with untracked id falls through to prefix path', () => {
@@ -51,7 +51,7 @@ test('quote-reply with untracked id falls through to prefix path', () => {
     update: update({ text: '/belfry restart', replyToId: 999 }),
     ...ctx(),
   });
-  assert.deepEqual(r, { slug: 'belfry', text: 'restart' });
+  assert.deepEqual(r, { slug: 'belfry', text: 'restart', messageId: 99 });
 });
 
 test('quote-reply with untracked id and no prefix → null', () => {
@@ -61,7 +61,7 @@ test('quote-reply with untracked id and no prefix → null', () => {
 
 test('prefix path with known slug routes', () => {
   const r = route({ update: update({ text: '/life-planner do X' }), ...ctx() });
-  assert.deepEqual(r, { slug: 'life-planner', text: 'do X' });
+  assert.deepEqual(r, { slug: 'life-planner', text: 'do X', messageId: 99 });
 });
 
 test('prefix path with unknown slug → null', () => {

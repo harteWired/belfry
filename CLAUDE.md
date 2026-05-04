@@ -2,7 +2,7 @@
 
 > Also follow /workspace/CLAUDE.md for global workspace conventions.
 
-Telegram-to-terminal MUX rigging for remote driving of multiple Claude Code projects. Outbound: watches [claudelike-bar](https://github.com/harteWired/claudelike-bar)'s `/tmp/claude-dashboard/<slug>.json` files and pings a Telegram bot when subscribed slugs change state. Inbound (in progress): replies on Telegram are fed into the matching active session via Claude Code hooks, as if you'd typed them at the prompt.
+Telegram-to-terminal MUX rigging for remote driving of multiple Claude Code projects. Outbound: watches `/tmp/claude-dashboard/<slug>.json` files (a shared local-machine convention — see `docs/CONVENTION.md`) and pings a Telegram bot when subscribed slugs change state. Inbound: replies on Telegram are fed into the matching active session via per-session MCP plugins emitting `notifications/claude/channel`, and the model can call the `reply` MCP tool (or the daemon's auto-reply) to send back to Telegram.
 
 ## Working in this repo
 
@@ -50,17 +50,20 @@ Two processes:
 
 ```
 bin/belfry.js              — daemon entry point + daemon loop
-bin/belfry-mcp.js          — per-session MCP plugin (registers, recv-loop, inject)
+bin/belfry-mcp.js          — per-session MCP plugin (registers, recv-loop, inject, reply tool)
+bin/belfry-hook.js         — Claude Code hook that writes the /tmp/claude-dashboard/ convention
+bin/belfry-install-hook.js — adds belfry-hook to .claude/settings.json with writer detection
 lib/watcher.js             — chokidar watcher on /tmp/claude-dashboard/*.json
 lib/composer.js            — 3-line mobile-friendly message builder
 lib/telegram.js            — Bot API HTTP helper (sendMessage)
 lib/throttle.js            — per-slug rate limiting + coalesce
 lib/config.js              — load + validate ~/.claude/belfry.jsonc
 lib/reply-tracker.js       — outbound message_id → slug LRU
-lib/router.js              — incoming Telegram update → (slug, text)
+lib/router.js              — incoming Telegram update → (slug, text, messageId)
 lib/poller.js              — Telegram getUpdates long-poll loop
-lib/registry.js            — HTTP register/unregister/recv for belfry-mcp instances
-lib/slug.js                — slug derivation (mirrors claudelike-bar's rules)
+lib/registry.js            — HTTP register/unregister/recv/send + pending-reply tracking
+lib/slug.js                — slug derivation per docs/CONVENTION.md
+docs/CONVENTION.md         — shared local-machine convention spec
 docs/install-mcp.md        — how to add belfry-mcp to a project
 test/                      — node --test
 ```
@@ -76,7 +79,11 @@ test/                      — node --test
    2. Fallback: `/<slug-name> message body` for cold sends with no message to quote.
    3. Unrouteable messages (no quote, no recognized prefix) → log + ignore. Don't guess.
 
-**Session ↔ slug binding.** belfry-mcp derives its own slug at startup via `lib/slug.js` (env `CLAUDELIKE_BAR_NAME` → `~/.claude/claudelike-bar-paths.json` → cwd basename) and reports it on register. The daemon never has to guess which session a slug refers to.
+**Session ↔ slug binding.** belfry-mcp derives its own slug at startup via `lib/slug.js` per the shared convention (`CLAUDE_SESSION_SLUG` → `CLAUDELIKE_BAR_NAME` → `~/.claude/claude-session-slugs.json` → `~/.claude/claudelike-bar-paths.json` → cwd basename) and reports it on register. The daemon never has to guess which session a slug refers to.
+
+**Outbound from session.** Two paths the model can use:
+1. Explicit `reply` MCP tool from `belfry-mcp` → POST `/send` on the registry → daemon calls `sendMessage` and quote-replies the originating Telegram message (or the slug's most recent outbound message if no inbound is pending).
+2. Auto-reply: when a Telegram message routes in, the daemon marks the slug as "owes a reply." On the next status flip to `ready` for that slug with a fresh `last_response`, the daemon sends `last_response` quote-replied to the originating message and clears the marker. Auto-reply is independent of subscriptions and throttle — it serves the conversational thread, not the event-ping channel.
 
 **Why this works for active and idle sessions.** The MCP transport is alive for the entire lifetime of the session — active, mid-tool-call, idle waiting for input, all the same. There is no "session is between turns, the inbox can't drain" case (the v1 Stop-hook problem) and no "session has no terminal, spawn a parallel one" case (the v1 spawn problem). The plugin is *in* the session; the channel notification is the same path the user's keyboard would go through.
 
@@ -92,13 +99,15 @@ Three-line composer optimized for mobile lock-screen previews. See `lib/composer
 
 When inbound lands, outbound messages need a footer indicating the message is replyable (e.g. "↩ Reply to this message to continue this session"). Tight on character budget; keep additions surgical.
 
-## Dependencies on claudelike-bar
+## The shared `/tmp/claude-dashboard/` convention
 
-belfry currently reads status JSONs that [claudelike-bar](https://github.com/harteWired/claudelike-bar)'s hook writes to `/tmp/claude-dashboard/<slug>.json`, and `lib/slug.js` mirrors claudelike-bar's slug derivation exactly (env → path index → cwd basename) so the hook-side slug matches the JSON-side slug. This makes claudelike-bar a hard install dep today.
+belfry reads and writes a small local-machine convention: `/tmp/claude-dashboard/<slug>.json` plus the slug-derivation rules. The full spec is in `docs/CONVENTION.md`. Neither belfry nor any other tool owns the convention — it is a filesystem shape that any local tool can choose to participate in. [claudelike-bar](https://github.com/harteWired/claudelike-bar) also reads and writes it, so a user can run either, both, or neither.
 
-**Direction (tracked in #6):** belfry should run standalone. The plan is to vendor a minimal hook inside belfry that writes the same JSON shape — claudelike-bar becomes an optional integration that adds the status bar UI on top, but belfry alone is enough for the Telegram bridge. Until that ships, treat the JSON contract as "what belfry expects to read" and verify against actual files in `/tmp/claude-dashboard/` rather than upstream docs.
+When belfry's hook (`bin/belfry-hook.js`) is installed in a project, it writes the JSON on every Stop / Notification / etc. event. `belfry-install-hook` adds the entry to `.claude/settings.json` and skips installation if it detects an existing writer of the convention (currently `claudelike-bar` and `belfry-hook`). Two writers writing the same shape on every event is wasted compute, so coordination happens once at install time, not at runtime.
 
-belfry also reads `last_response` (when present) for the "Claude: …" line in the composer. Documented as added in claudelike-bar v0.18.1+, but the version installed in this workspace is v0.17.0 and live JSONs only carry `last_prompt`. The composer degrades gracefully (skips the line) but it never renders today. Tracked in #5.
+Slug derivation order (see `lib/slug.js` and `docs/CONVENTION.md`): `CLAUDE_SESSION_SLUG` env → `CLAUDELIKE_BAR_NAME` env (legacy) → `~/.claude/claude-session-slugs.json` → `~/.claude/claudelike-bar-paths.json` (legacy) → `basename(cwd)`. The legacy paths exist for backward compatibility with users who installed claudelike-bar earlier; new writers should use the neutral paths.
+
+`last_response` was historically a sticking point — claudelike-bar v0.17.0 didn't populate it, which left the composer's "Claude: …" line and the auto-reply path inert. With `belfry-hook` vendored, belfry can populate `last_response` itself by tailing the transcript, so the auto-reply path works without depending on a particular CLB version.
 
 ## Required env vars
 

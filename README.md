@@ -8,9 +8,11 @@ Single-user, single-platform (Telegram), single-host (loopback). Read `CLAUDE.md
 
 Two flows, one daemon.
 
-**Outbound.** Watches [claudelike-bar](https://github.com/harteWired/claudelike-bar)'s `/tmp/claude-dashboard/<slug>.json` files. When a subscribed slug enters a state you care about (`ready`, `error`), composes a 3-line message with the last user prompt + last Claude response and pushes it to your Telegram bot. Per-slug throttle and coalesce keep fan-out bursts from spamming you.
+**Outbound.** Watches `/tmp/claude-dashboard/<slug>.json` files (a shared local-machine convention; see `docs/CONVENTION.md`). When a subscribed slug enters a state you care about (`ready`, `error`), composes a 3-line message with the last user prompt + last Claude response and pushes it to your Telegram bot. Per-slug throttle and coalesce keep fan-out bursts from spamming you.
 
 **Inbound.** Replies on Telegram route back to the matching session via a per-session `belfry-mcp` MCP plugin. The daemon owns the bot and the registry; each plugin registers over loopback HTTP and long-polls for replies, then emits MCP `notifications/claude/channel` to inject the text into its parent claude as user input — same path the bundled `plugin:telegram` uses, generalized to N sessions sharing one bot. No multiplexer, no keystroke injection — the local terminal stays sovereign.
+
+**Replying to Telegram from the session.** Two paths. The model can call belfry-mcp's `reply` tool to send back explicitly. Or, automatically: when an inbound Telegram message routes into a session, the daemon marks the slug as owing a reply; on the next status flip to `ready` for that slug, it sends `last_response` quote-replied to the originating message and clears the marker.
 
 Routing inbound: quote-reply (primary) or `/<slug-name> message body` (fallback). Replies from any chat ID other than `BELFRY_CHAT_ID` are silently dropped.
 
@@ -30,7 +32,8 @@ belfry is the inverse: outbound-only at first, then bidirectional, multi-termina
    BELFRY_TOKEN=<token> BELFRY_CHAT_ID=<chat-id> node bin/belfry.js
    ```
 5. (For inbound replies) Add the belfry MCP plugin to each project you want to drive — see `docs/install-mcp.md`. Drop a `.mcp.json` at the project root pointing at `bin/belfry-mcp.js` and restart the Claude Code session.
-6. For an always-on setup, write a small launcher that pulls the credentials from your secret store of choice (env, dotenv, AWS Secrets Manager, age-encrypted YAML, whatever you use) and `exec`s `node bin/belfry.js`. Belfry itself is intentionally agnostic — it just reads env vars.
+6. (For status JSONs without claudelike-bar) Run `belfry-install-hook` from each project root. It adds `belfry-hook` to the project's `.claude/settings.json` and skips if it detects another writer of the convention (e.g. claudelike-bar). With both installed, neither overwrites the other — the first installer wins, the second is a no-op.
+7. For an always-on setup, write a small launcher that pulls the credentials from your secret store of choice (env, dotenv, AWS Secrets Manager, age-encrypted YAML, whatever you use) and `exec`s `node bin/belfry.js`. Belfry itself is intentionally agnostic — it just reads env vars.
 
 ## Required env vars
 

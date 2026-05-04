@@ -121,14 +121,95 @@ test('plugin emits notifications/claude/channel when daemon delivers', async () 
   await p.stop();
 });
 
-test('plugin tools/list returns empty list', async () => {
+test('plugin tools/list advertises the reply tool', async () => {
   const p = startPlugin();
   p.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } });
   await p.waitFor((m) => m.id === 1);
   p.send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const resp = await p.waitFor((m) => m.id === 2);
-  assert.deepEqual(resp.result.tools, []);
+  assert.equal(resp.result.tools.length, 1);
+  assert.equal(resp.result.tools[0].name, 'reply');
+  assert.deepEqual(resp.result.tools[0].inputSchema.required, ['text']);
   await p.stop();
+});
+
+test('reply tool POSTs to daemon /send and reports the message_id', async () => {
+  // Spin up a registry with a stub onSend so we can assert what the spoke sent.
+  const calls = [];
+  const reg = new (await import('../lib/registry.js')).Registry({
+    port: 0,
+    recvTimeoutMs: 200,
+    onSend: async ({ slug, text, replyToMessageId }) => {
+      calls.push({ slug, text, replyToMessageId });
+      return { message_id: 7777 };
+    },
+  });
+  await reg.start();
+  const child = spawn('node', [PLUGIN_PATH], {
+    cwd: '/tmp',
+    env: {
+      ...process.env,
+      BELFRY_MCP_BASE: `http://127.0.0.1:${reg.port}`,
+      CLAUDELIKE_BAR_NAME: 'reply-test',
+    },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const messages = [];
+  let buf = '';
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    buf += chunk;
+    while (true) {
+      const nl = buf.indexOf('\n');
+      if (nl < 0) break;
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (line) {
+        try { messages.push(JSON.parse(line)); } catch { /* ignore */ }
+      }
+    }
+  });
+  let stderr = '';
+  child.stderr.setEncoding('utf8');
+  child.stderr.on('data', (c) => { stderr += c; });
+  const send = (msg) => child.stdin.write(JSON.stringify(msg) + '\n');
+  const waitFor = async (pred, timeoutMs = 3000) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const found = messages.find(pred);
+      if (found) return found;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    throw new Error(`waitFor timed out: ${JSON.stringify(messages)}\nstderr:\n${stderr}`);
+  };
+
+  send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } });
+  await waitFor((m) => m.id === 1);
+  send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  // Wait for the spoke to register.
+  const start = Date.now();
+  while (Date.now() - start < 2000) {
+    if (reg.bySlug.has('reply-test')) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.ok(reg.bySlug.has('reply-test'));
+
+  send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'reply', arguments: { text: 'hello human' } } });
+  const resp = await waitFor((m) => m.id === 2);
+  assert.ok(resp.result, `expected result, got ${JSON.stringify(resp)}`);
+  assert.equal(resp.result.content[0].type, 'text');
+  assert.match(resp.result.content[0].text, /7777/);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].slug, 'reply-test');
+  assert.equal(calls[0].text, 'hello human');
+
+  child.stdin.end();
+  await new Promise((resolve) => {
+    if (child.exitCode !== null) return resolve();
+    child.on('exit', resolve);
+    setTimeout(() => child.kill('SIGTERM'), 1000).unref();
+  });
+  await reg.stop();
 });
 
 test('plugin unregisters cleanly on stdin close', async () => {

@@ -121,3 +121,135 @@ test('queue drains FIFO when multiple deliveries land before recv', async () => 
   assert.deepEqual(await r2.json(), { text: 'second' });
   await post('/unregister', { instance_id: 'm' });
 });
+
+test('deliver with originatingMessageId marks pending reply when an instance is registered', async () => {
+  registry.clearOwesReply('pen');
+  await post('/register', { instance_id: 'penny', slug: 'pen', cwd: '/x' });
+  registry.deliver('pen', 'inbound', 4242);
+  assert.equal(registry.getOwesReply('pen'), 4242);
+  // Drain the queue + clean up.
+  await fetch(`${baseUrl}/recv?instance_id=penny`);
+  registry.clearOwesReply('pen');
+  await post('/unregister', { instance_id: 'penny' });
+});
+
+test('deliver does NOT mark pending reply when no instance is registered for the slug', () => {
+  // Phantom auto-reply guard: dropping an inbound must not leave a marker
+  // that a later, unrelated `ready` transition would consume.
+  registry.clearOwesReply('ghost-slug');
+  const n = registry.deliver('ghost-slug', 'inbound', 9999);
+  assert.equal(n, 0);
+  assert.equal(registry.getOwesReply('ghost-slug'), null);
+});
+
+test('/send proxies to onSend callback and clears the pending marker', async () => {
+  const calls = [];
+  const reg = new Registry({
+    port: 0,
+    recvTimeoutMs: 200,
+    onSend: async ({ slug, text, replyToMessageId }) => {
+      calls.push({ slug, text, replyToMessageId });
+      return { message_id: 555 };
+    },
+  });
+  await reg.start();
+  const url = `http://127.0.0.1:${reg.port}`;
+  await fetch(`${url}/register`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instance_id: 'sx', slug: 'send-slug', cwd: '/x' }),
+  });
+  // Mark pending so /send picks it up as the implicit reply target.
+  reg.markOwesReply('send-slug', 808);
+  const res = await fetch(`${url}/send`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instance_id: 'sx', text: 'hi back' }),
+  });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { ok: true, message_id: 555 });
+  assert.deepEqual(calls, [{ slug: 'send-slug', text: 'hi back', replyToMessageId: 808 }]);
+  // Pending marker should be cleared after a successful explicit /send.
+  assert.equal(reg.getOwesReply('send-slug'), null);
+  await reg.stop();
+});
+
+test('/send returns 404 for unknown instance', async () => {
+  const reg = new Registry({ port: 0, recvTimeoutMs: 200, onSend: async () => ({ message_id: 1 }) });
+  await reg.start();
+  const url = `http://127.0.0.1:${reg.port}`;
+  const res = await fetch(`${url}/send`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instance_id: 'nope', text: 'x' }),
+  });
+  assert.equal(res.status, 404);
+  await reg.stop();
+});
+
+test('/send returns 503 when onSend is not configured', async () => {
+  // Default `registry` fixture has no onSend.
+  await post('/register', { instance_id: 'no-send', slug: 'ns', cwd: '/x' });
+  const res = await fetch(`${baseUrl}/send`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instance_id: 'no-send', text: 'x' }),
+  });
+  assert.equal(res.status, 503);
+  await post('/unregister', { instance_id: 'no-send' });
+});
+
+test('/send returns 502 when onSend throws', async () => {
+  const reg = new Registry({
+    port: 0,
+    recvTimeoutMs: 200,
+    onSend: async () => { throw new Error('telegram down'); },
+  });
+  await reg.start();
+  const url = `http://127.0.0.1:${reg.port}`;
+  await fetch(`${url}/register`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instance_id: 'th', slug: 'th-slug', cwd: '/x' }),
+  });
+  const res = await fetch(`${url}/send`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instance_id: 'th', text: 'x' }),
+  });
+  assert.equal(res.status, 502);
+  const body = await res.json();
+  assert.equal(body.ok, false);
+  await reg.stop();
+});
+
+test('/send rejects empty text and oversized text', async () => {
+  const reg = new Registry({ port: 0, recvTimeoutMs: 200, onSend: async () => ({ message_id: 1 }) });
+  await reg.start();
+  const url = `http://127.0.0.1:${reg.port}`;
+  await fetch(`${url}/register`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instance_id: 'lim', slug: 'lim-slug', cwd: '/x' }),
+  });
+  const empty = await fetch(`${url}/send`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instance_id: 'lim', text: '' }),
+  });
+  assert.equal(empty.status, 400);
+  const big = await fetch(`${url}/send`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instance_id: 'lim', text: 'x'.repeat(5000) }),
+  });
+  assert.equal(big.status, 413);
+  await reg.stop();
+});
+
+test('pending reply marker has TTL and is cleared by clearOwesReply', () => {
+  registry.markOwesReply('ttl-slug', 11);
+  assert.equal(registry.getOwesReply('ttl-slug'), 11);
+  registry.clearOwesReply('ttl-slug');
+  assert.equal(registry.getOwesReply('ttl-slug'), null);
+});

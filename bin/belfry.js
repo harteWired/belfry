@@ -13,6 +13,7 @@ import { sendMessage } from '../lib/telegram.js';
 import { ReplyTracker } from '../lib/reply-tracker.js';
 import { Registry } from '../lib/registry.js';
 import { Poller } from '../lib/poller.js';
+import { maybeAutoReply } from '../lib/auto-reply.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -73,7 +74,17 @@ async function main() {
   const tokenPath = join(stateDir, 'registry.token');
   const authToken = ensureAuthToken(tokenPath);
 
-  const registry = new Registry({ port: mcpPort, log, authToken });
+  // Outbound dispatcher used by both the spoke `reply` tool (via /send) and
+  // the auto-reply path below. Records the new message_id in the reply
+  // tracker so subsequent quote-replies on this thread route correctly.
+  const sendOutbound = async ({ slug, text, replyToMessageId }) => {
+    const result = await sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId });
+    if (result?.message_id) replyTracker.record(result.message_id, slug);
+    log(`sent ${slug}: outbound reply (${text.length} chars, msg ${result?.message_id}${replyToMessageId ? `, in reply to ${replyToMessageId}` : ''})`);
+    return { message_id: result?.message_id };
+  };
+
+  const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound });
   await registry.start();
 
   const poller = new Poller({
@@ -116,6 +127,22 @@ async function main() {
       const newStatus = statusFile?.status;
       const prevStatus = prevStatusFile?.status;
       if (typeof newStatus !== 'string') return;
+
+      // Auto-reply path: independent of subscriptions and throttle. If this
+      // slug owes Telegram a reply (an inbound message routed in earlier)
+      // and the session has now produced a fresh last_response, quote-reply
+      // it back. Pure function in lib/auto-reply.js; tested in isolation.
+      maybeAutoReply({
+        slug,
+        statusFile,
+        prevStatusFile,
+        newStatus,
+        getOwesReply: (s) => registry.getOwesReply(s),
+        clearOwesReply: (s) => registry.clearOwesReply(s),
+        sendOutbound,
+        log,
+      });
+
       if (!shouldFire(config, slug, prevStatus, newStatus)) return;
       throttle.enqueue(slug, { status: newStatus, event: statusFile.event, statusFile });
     },

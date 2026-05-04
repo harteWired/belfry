@@ -102,7 +102,7 @@ function handleMessage(msg) {
         },
       },
       instructions:
-        'Messages routed via belfry arrive as user input. They originate from Telegram replies the user quoted to a belfry message. Reply normally — outbound is handled by the daemon watching claudelike-bar status JSONs.',
+        'Messages routed via belfry arrive as user input. They originate from Telegram replies the sender quoted to a belfry message. The sender reads Telegram, not this terminal — anything you want them to see must go through the reply tool. Status pings (ready/error) fire automatically via the daemon and do not need a reply call.',
     });
     return;
   }
@@ -112,7 +112,33 @@ function handleMessage(msg) {
     return;
   }
   if (msg.method === 'tools/list') {
-    respond(msg.id, { tools: [] });
+    respond(msg.id, {
+      tools: [
+        {
+          name: 'reply',
+          description:
+            'Send a message back to the originating Telegram chat for this session. Use to reply to the human who sent the inbound Telegram message that triggered the current turn. Threads as a quote-reply to that message automatically.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              text: {
+                type: 'string',
+                description: 'Message text to send to Telegram. ≤ 4096 chars.',
+              },
+            },
+            required: ['text'],
+            additionalProperties: false,
+          },
+        },
+      ],
+    });
+    return;
+  }
+  if (msg.method === 'tools/call') {
+    handleToolCall(msg).catch((err) => {
+      log(`tools/call error: ${err.message}`);
+      respondError(msg.id, -32603, `tool error: ${err.message}`);
+    });
     return;
   }
   if (msg.method === 'resources/list') {
@@ -130,6 +156,41 @@ function handleMessage(msg) {
   if (msg.id !== undefined) {
     respondError(msg.id, -32601, `method not found: ${msg.method}`);
   }
+}
+
+async function handleToolCall(msg) {
+  const name = msg.params?.name;
+  const args = msg.params?.arguments ?? {};
+  if (name !== 'reply') {
+    respondError(msg.id, -32602, `unknown tool: ${name}`);
+    return;
+  }
+  const text = typeof args.text === 'string' ? args.text : '';
+  if (text.length === 0) {
+    respondError(msg.id, -32602, 'reply: text must be a non-empty string');
+    return;
+  }
+  const res = await fetch(`${DAEMON_BASE}/send`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ instance_id: instanceId, text }),
+  });
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '');
+    respondError(msg.id, -32603, `daemon /send ${res.status}: ${errBody.slice(0, 200)}`);
+    return;
+  }
+  const body = await res.json().catch(() => ({}));
+  respond(msg.id, {
+    content: [
+      {
+        type: 'text',
+        text: body?.message_id
+          ? `Sent to Telegram (message ${body.message_id}).`
+          : 'Sent to Telegram.',
+      },
+    ],
+  });
 }
 
 async function register() {

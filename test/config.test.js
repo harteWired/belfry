@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-import { loadConfig, isSubscribed } from '../lib/config.js';
+import { loadConfig, isSubscribed, isSummarized } from '../lib/config.js';
 
 function tmp(content) {
   const p = path.join(os.tmpdir(), `belfry-test-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonc`);
@@ -67,4 +67,20 @@ test('isSubscribed matches slug + event', () => {
   assert.equal(isSubscribed(cfg, 'a', 'error'), true);
   assert.equal(isSubscribed(cfg, 'a', 'waiting'), false);
   assert.equal(isSubscribed(cfg, 'b', 'ready'), false);
+});
+
+test('summarize defaults to false and only true when explicitly set', () => {
+  const p = tmp(`{
+    "subscriptions": {
+      "a": { "events": ["ready"], "summarize": true },
+      "b": { "events": ["ready"] },
+      "c": { "events": ["ready"], "summarize": "yes" }
+    }
+  }`);
+  const cfg = loadConfig(p);
+  assert.equal(isSummarized(cfg, 'a'), true);
+  assert.equal(isSummarized(cfg, 'b'), false);
+  assert.equal(isSummarized(cfg, 'c'), false, 'non-boolean summarize is rejected');
+  assert.equal(isSummarized(cfg, 'unknown'), false);
+  fs.unlinkSync(p);
 });

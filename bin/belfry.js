@@ -5,7 +5,7 @@ import { join, dirname } from 'node:path';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 
-import { loadConfig, isSubscribed } from '../lib/config.js';
+import { loadConfig, isSubscribed, isSummarized } from '../lib/config.js';
 import { StatusWatcher } from '../lib/watcher.js';
 import { Throttle } from '../lib/throttle.js';
 import { compose } from '../lib/composer.js';
@@ -14,6 +14,7 @@ import { ReplyTracker } from '../lib/reply-tracker.js';
 import { Registry } from '../lib/registry.js';
 import { Poller } from '../lib/poller.js';
 import { maybeAutoReply } from '../lib/auto-reply.js';
+import { summarize } from '../lib/summarizer.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -55,6 +56,24 @@ async function main() {
     process.exit(1);
   }
   log(`telegram bot configured (chat ${chatId}${forumTopicId ? `, topic ${forumTopicId}` : ''})`);
+
+  // Optional Haiku summarizer. Per-slug opt-in via subscriptions[slug].summarize
+  // in belfry.jsonc. If the env var is unset, summarization is disabled and
+  // the composer falls back to its existing truncate path — no error.
+  const anthropicApiKey = (process.env.ANTHROPIC_API_KEY ?? '').trim();
+  if (anthropicApiKey) {
+    const enabledSlugs = Object.entries(config.subscriptions)
+      .filter(([, s]) => s.summarize)
+      .map(([slug]) => slug);
+    if (enabledSlugs.length > 0) {
+      log(`summarizer enabled for ${enabledSlugs.length} slug(s): ${enabledSlugs.join(', ')}`);
+    }
+  } else {
+    const wantSummarize = Object.values(config.subscriptions).some((s) => s.summarize);
+    if (wantSummarize) {
+      log('ANTHROPIC_API_KEY unset — summarize:true subscriptions will fall back to truncate');
+    }
+  }
 
   // Inbound: per-session belfry-mcp plugins register here. The poller routes
   // each Telegram reply to the slug's registered plugin(s) which inject the
@@ -102,12 +121,27 @@ async function main() {
     coalesceMs: config.coalesceMs,
     throttleMs: config.throttleMs,
     dispatch: async (slug, event) => {
+      let statusFile = event.statusFile;
+      if (anthropicApiKey && isSummarized(config, slug)) {
+        const summary = await summarize({
+          prompt: statusFile?.last_prompt,
+          response: statusFile?.last_response,
+          apiKey: anthropicApiKey,
+        });
+        if (summary) {
+          statusFile = {
+            ...statusFile,
+            last_prompt: summary.prompt ?? statusFile?.last_prompt,
+            last_response: summary.response ?? statusFile?.last_response,
+          };
+        }
+      }
       const text = compose({
         slug,
         status: event.status,
         event: event.event,
-        statusFile: event.statusFile,
-        displayName: event.statusFile?.displayName ?? slug,
+        statusFile,
+        displayName: statusFile?.displayName ?? slug,
         promptCap: config.promptCap,
         responseCap: config.responseCap,
         replyFooter: true,

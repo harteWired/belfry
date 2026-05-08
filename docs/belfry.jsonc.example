@@ -8,7 +8,13 @@
     // /tmp/claude-dashboard/<slug>.json). Run `ls /tmp/claude-dashboard/` to
     // see what's currently active.
     "life-planner": {
-      "events": ["ready", "error"]
+      "events": ["ready", "error"],
+      // Optional: pipe last_prompt/last_response through Claude Haiku to
+      // produce 1-line summaries before send. Off by default. Requires
+      // ANTHROPIC_API_KEY in the daemon's env. Fails open — if the API call
+      // errors or times out, the message falls back to the existing
+      // truncate-at-promptCap/responseCap behavior.
+      "summarize": true
     },
     "financial-planner": {
       "events": ["ready"]

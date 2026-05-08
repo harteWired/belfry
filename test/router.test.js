@@ -43,7 +43,7 @@ test('quote-reply routes to tracked slug', () => {
     update: update({ text: 'do the thing', replyToId: 42 }),
     ...ctx({ tracked: [[42, 'life-planner']] }),
   });
-  assert.deepEqual(r, { slug: 'life-planner', text: 'do the thing', messageId: 99 });
+  assert.deepEqual(r, { action: 'deliver', slug: 'life-planner', text: 'do the thing', messageId: 99 });
 });
 
 test('quote-reply with untracked id falls through to prefix path', () => {
@@ -51,7 +51,7 @@ test('quote-reply with untracked id falls through to prefix path', () => {
     update: update({ text: '/belfry restart', replyToId: 999 }),
     ...ctx(),
   });
-  assert.deepEqual(r, { slug: 'belfry', text: 'restart', messageId: 99 });
+  assert.deepEqual(r, { action: 'deliver', slug: 'belfry', text: 'restart', messageId: 99 });
 });
 
 test('quote-reply with untracked id and no prefix → null', () => {
@@ -61,7 +61,7 @@ test('quote-reply with untracked id and no prefix → null', () => {
 
 test('prefix path with known slug routes', () => {
   const r = route({ update: update({ text: '/life-planner do X' }), ...ctx() });
-  assert.deepEqual(r, { slug: 'life-planner', text: 'do X', messageId: 99 });
+  assert.deepEqual(r, { action: 'deliver', slug: 'life-planner', text: 'do X', messageId: 99 });
 });
 
 test('prefix path with unknown slug → null', () => {
@@ -85,5 +85,36 @@ test('quote-reply takes precedence over prefix when both present', () => {
 
 test('plain text with no reply and no prefix → null', () => {
   const r = route({ update: update({ text: 'just chatting' }), ...ctx() });
+  assert.equal(r, null);
+});
+
+test('/status with no slug returns action=status with slug=null', () => {
+  const r = route({ update: update({ text: '/status' }), ...ctx() });
+  assert.deepEqual(r, { action: 'status', slug: null, messageId: 99 });
+});
+
+test('/status <slug> returns action=status with that slug', () => {
+  const r = route({ update: update({ text: '/status belfry' }), ...ctx() });
+  assert.deepEqual(r, { action: 'status', slug: 'belfry', messageId: 99 });
+});
+
+test('/status takes precedence over slug-prefix routing', () => {
+  // Even if a slug were named "status", the reserved command wins.
+  const r = route({
+    update: update({ text: '/status' }),
+    ...ctx({ knownSlugs: ['status'] }),
+  });
+  assert.equal(r.action, 'status');
+});
+
+test('/status with trailing whitespace still routes', () => {
+  const r = route({ update: update({ text: '/status  ' }), ...ctx() });
+  assert.equal(r.action, 'status');
+  assert.equal(r.slug, null);
+});
+
+test('/status with extra args after slug → null (rejected, not a delivery)', () => {
+  // /status takes only an optional slug — anything else is malformed.
+  const r = route({ update: update({ text: '/status belfry now' }), ...ctx() });
   assert.equal(r, null);
 });

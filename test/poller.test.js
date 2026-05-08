@@ -189,3 +189,53 @@ test('knownSlugs is read fresh per tick (live registry view)', async () => {
   await poller.tick();
   assert.deepEqual(target.delivered, [{ slug: 'late', text: 'do thing 2' }]);
 });
+
+test('tick: /status routes to onStatusRequest, not target.deliver', async () => {
+  const updates = [
+    {
+      update_id: 700,
+      message: { message_id: 71, chat: { id: CHAT }, text: '/status' },
+    },
+    {
+      update_id: 701,
+      message: { message_id: 72, chat: { id: CHAT }, text: '/status belfry' },
+    },
+  ];
+  const target = fakeTarget(['belfry']);
+  const seen = [];
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker: new ReplyTracker(),
+    target,
+    onStatusRequest: async (req) => { seen.push(req); },
+    fetchFn: fakeOk(updates),
+  });
+  await poller.tick();
+  // onStatusRequest is fire-and-forget; flush the microtask queue.
+  await new Promise((r) => setImmediate(r));
+  assert.equal(target.delivered.length, 0);
+  assert.equal(seen.length, 2);
+  assert.deepEqual(seen[0], { slug: null, messageId: 71 });
+  assert.deepEqual(seen[1], { slug: 'belfry', messageId: 72 });
+});
+
+test('tick: /status with no handler logs and drops without crashing', async () => {
+  const updates = [
+    { update_id: 800, message: { message_id: 81, chat: { id: CHAT }, text: '/status' } },
+  ];
+  const target = fakeTarget();
+  const logs = [];
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker: new ReplyTracker(),
+    target,
+    fetchFn: fakeOk(updates),
+    log: (m) => logs.push(m),
+    // no onStatusRequest
+  });
+  await poller.tick();
+  assert.equal(target.delivered.length, 0);
+  assert.ok(logs.some((m) => /no handler/.test(m)));
+});

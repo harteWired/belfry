@@ -16,6 +16,7 @@ import { Registry } from '../lib/registry.js';
 import { Poller } from '../lib/poller.js';
 import { maybeAutoReply } from '../lib/auto-reply.js';
 import { summarize, summarizeBatch } from '../lib/summarizer.js';
+import { makeStatusHandler } from '../lib/status-handler.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -107,11 +108,23 @@ async function main() {
   const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound });
   await registry.start();
 
+  // /status [slug] command handler (#12). Reads the dashboard JSONs and
+  // sends a digest back as a quote-reply. No-AI fallback works without
+  // ANTHROPIC_API_KEY — model call only enriches the single-slug case.
+  const statusHandler = makeStatusHandler({
+    apiKey: anthropicApiKey,
+    summarizeBatchFn: anthropicApiKey ? summarizeBatch : null,
+    send: ({ text, replyToMessageId }) =>
+      sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
+    log,
+  });
+
   const poller = new Poller({
     botToken,
     expectedChatId: Number(chatId),
     replyTracker,
     target: registry,
+    onStatusRequest: statusHandler,
     log,
   });
   poller.start();

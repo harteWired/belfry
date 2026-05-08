@@ -91,7 +91,7 @@ test/                      — node --test
 
 See `docs/belfry.jsonc.example` for the canonical form. Phase 1+ will extend the schema with an inbound block (per-slug enable for replies, per-slug Telegram routing aliases). Keep additions backward-compatible — existing configs must continue to work as outbound-only.
 
-`VALID_EVENTS` in `lib/config.js` is `{ready, error, waiting}` — a deliberately small subset of what claudelike-bar emits, to keep ping volume low. Note: `waiting` is currently a dead option (claudelike-bar doesn't produce that status). Either remove it or wire it up.
+`VALID_EVENTS` in `lib/config.js` is `{ready, error, waiting}` — a deliberately small subset of the statuses the convention can carry, to keep ping volume low. `waiting` corresponds to Claude Code's `Notification` event (permission prompts, idle waits) — produced by `bin/belfry-hook.js`. Other statuses the hook produces (`working`, `idle`, `offline`) are intentionally excluded from `VALID_EVENTS`: they fire on every tool call / session boundary and would drown the ping channel.
 
 ## Message format
 

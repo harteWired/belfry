@@ -78,20 +78,36 @@ test('Digest: separate slugs flush independently', async () => {
   assert.deepEqual(flushes, [{ slug: 'a', count: 1 }, { slug: 'b', count: 1 }]);
 });
 
-test('Digest: flushAll on shutdown delivers buffered events synchronously', async () => {
+test('Digest: flushAll awaits async flush callbacks (no-drop on shutdown)', async () => {
   const flushed = [];
+  let resolveFlush;
+  const flushDone = new Promise((r) => { resolveFlush = r; });
   const digest = new Digest({
     idleMs: 1000,
     windowMs: 5000,
-    flush: (slug, events) => flushed.push({ slug, events }),
+    flush: async (slug, events) => {
+      // Simulate the real flush: await a network call before recording.
+      await new Promise((r) => setTimeout(r, 20));
+      flushed.push({ slug, events });
+      resolveFlush();
+    },
   });
   digest.enqueue('s', { x: 1 });
   digest.enqueue('s', { x: 2 });
-  digest.flushAll();
-  // flushAll queues a microtask via Promise.resolve — wait one tick.
-  await new Promise((r) => setImmediate(r));
+  await digest.flushAll();
+  // flushAll must have awaited the async callback — flushed is populated.
   assert.equal(flushed.length, 1);
   assert.equal(flushed[0].events.length, 2);
+  await flushDone; // sanity: the resolution we observed was real
+});
+
+test('Digest: flushAll resolves to empty Promise.all when nothing pending', async () => {
+  const digest = new Digest({
+    idleMs: 1000,
+    windowMs: 5000,
+    flush: () => { throw new Error('should not be called'); },
+  });
+  await digest.flushAll();
 });
 
 test('Digest: clearAll drops pending without flushing', async () => {

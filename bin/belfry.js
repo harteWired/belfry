@@ -111,9 +111,13 @@ async function main() {
   // /status [slug] command handler (#12). Reads the dashboard JSONs and
   // sends a digest back as a quote-reply. No-AI fallback works without
   // ANTHROPIC_API_KEY — model call only enriches the single-slug case.
+  // Pre-bind apiKey into a closure so the handler doesn't need to know about
+  // it — also reuses summarize()'s sha256 cache for repeat /status calls.
+  const summarizeFn = anthropicApiKey
+    ? (args) => summarize({ ...args, apiKey: anthropicApiKey })
+    : null;
   const statusHandler = makeStatusHandler({
-    apiKey: anthropicApiKey,
-    summarizeBatchFn: anthropicApiKey ? summarizeBatch : null,
+    summarizeFn,
     send: ({ text, replyToMessageId }) =>
       sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
     log,
@@ -178,13 +182,14 @@ async function main() {
     windowMs: config.digestWindowMs,
     flush: async (slug, events) => {
       const latest = events[events.length - 1];
+      const cap = (s, n) => (typeof s === 'string' && s.length > n ? s.slice(0, n - 1) + '…' : s);
       const summary = anthropicApiKey
         ? await summarizeBatch({
             events: events.map((e) => ({
               status: e.status,
               statusLabel: e.statusFile?.statusLabel,
-              prompt: e.statusFile?.last_prompt,
-              response: e.statusFile?.last_response,
+              prompt: cap(e.statusFile?.last_prompt, config.promptCap),
+              response: cap(e.statusFile?.last_response, config.responseCap),
             })),
             apiKey: anthropicApiKey,
           })
@@ -244,7 +249,7 @@ async function main() {
   const shutdown = async (signal) => {
     log(`received ${signal} — shutting down`);
     throttle.clearAll();
-    digest.flushAll();
+    await digest.flushAll();
     await poller.stop();
     await registry.stop();
     await watcher.stop();

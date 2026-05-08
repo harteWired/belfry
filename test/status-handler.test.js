@@ -77,7 +77,7 @@ test('buildSingleSlugDigest: missing JSON → not-recognized fallback', async ()
   assert.match(out, /no dashboard JSON/);
 });
 
-test('buildSingleSlugDigest: no api key → single-line fallback with last_response', async () => {
+test('buildSingleSlugDigest: no summarizeFn → single-line fallback with last_response', async () => {
   const dir = tmpDir();
   writeStatus(dir, 'belfry', {
     status: 'ready',
@@ -90,30 +90,30 @@ test('buildSingleSlugDigest: no api key → single-line fallback with last_respo
   assert.match(out, /Claude: Shipped the feature\./);
 });
 
-test('buildSingleSlugDigest: with api key + summarizeBatch → uses summary', async () => {
+test('buildSingleSlugDigest: with summarizeFn → uses summary { prompt, response }', async () => {
   const dir = tmpDir();
   writeStatus(dir, 'belfry', {
     status: 'ready',
     statusLabel: 'Done',
-    last_prompt: 'add tests',
+    last_prompt: 'add tests please',
     last_response: 'I added 13 tests',
     updatedAt: Date.now(),
   });
-  const summarizeBatchFn = async ({ events }) => {
-    assert.equal(events.length, 1);
-    return 'Added a batch of tests.\nAll green.';
+  const summarizeFn = async ({ prompt, response }) => {
+    assert.equal(prompt, 'add tests please');
+    assert.equal(response, 'I added 13 tests');
+    return { prompt: 'add tests', response: 'added 13' };
   };
   const out = await buildSingleSlugDigest({
     slug: 'belfry',
     statusDir: dir,
-    apiKey: 'sk',
-    summarizeBatchFn,
+    summarizeFn,
   });
-  assert.match(out, /Added a batch of tests\./);
-  assert.match(out, /All green\./);
+  assert.match(out, /You: add tests/);
+  assert.match(out, /Claude: added 13/);
 });
 
-test('buildSingleSlugDigest: summarizeBatch returns null → falls back to last_response', async () => {
+test('buildSingleSlugDigest: summarizeFn returns null → falls back to last_response', async () => {
   const dir = tmpDir();
   writeStatus(dir, 'belfry', {
     status: 'error',
@@ -123,10 +123,24 @@ test('buildSingleSlugDigest: summarizeBatch returns null → falls back to last_
   const out = await buildSingleSlugDigest({
     slug: 'belfry',
     statusDir: dir,
-    apiKey: 'sk',
-    summarizeBatchFn: async () => null,
+    summarizeFn: async () => null,
   });
   assert.match(out, /Claude: rate limited/);
+});
+
+test('buildSingleSlugDigest: summarizeFn returns both-null fields → falls back', async () => {
+  const dir = tmpDir();
+  writeStatus(dir, 'belfry', {
+    status: 'ready',
+    last_response: 'something',
+    updatedAt: Date.now(),
+  });
+  const out = await buildSingleSlugDigest({
+    slug: 'belfry',
+    statusDir: dir,
+    summarizeFn: async () => ({ prompt: null, response: null }),
+  });
+  assert.match(out, /Claude: something/);
 });
 
 test('makeStatusHandler: routes single-slug request to send() with replyToMessageId', async () => {

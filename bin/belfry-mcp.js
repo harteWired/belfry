@@ -285,7 +285,6 @@ async function recvLoop() {
       continue;
     }
     if (typeof body?.text === 'string' && body.text.length > 0) {
-      log(`recv got ${body.text.length} chars — emitting channel notification`);
       injectChannelMessage(body.text);
     }
   }

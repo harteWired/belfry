@@ -73,7 +73,7 @@ test/                      — node --test
 **Mechanism.** belfry-mcp emits MCP `notifications/claude/channel` to inject Telegram text into its parent claude session as user input. This is the same channel notification path the bundled `plugin:telegram` uses for one-session bidirectional — belfry generalizes it to N sessions sharing one bot, with the daemon owning the routing.
 
 1. **Per-session plugin (`bin/belfry-mcp.js`).** Loaded via `.mcp.json` in projects that want bidirectional. On `initialize` it declares `claude/channel` capability; on `notifications/initialized` it POSTs `/register` to the daemon and starts long-polling `/recv?instance_id=…`. When the long-poll resolves with text, the plugin emits `notifications/claude/channel` and Claude Code injects it into the session.
-2. **Central registry (`lib/registry.js`).** Loopback HTTP on `127.0.0.1:<port>` (default `9876`, env override `BELFRY_MCP_PORT`). In-memory state: `instance_id → { slug, queue, waiter }` and a `slug → Set<instance_id>` index. `deliver(slug, text)` fans out to every registered instance for that slug; absent registration → drop with a log line.
+2. **Central registry (`lib/registry.js`).** Loopback HTTP on `127.0.0.1:<port>` (default `49876`, env override `BELFRY_MCP_PORT`). Picked from the IANA dynamic range to avoid collision with other local-loopback MCP servers (e.g. fusion360-mcp, which hardcodes `9876`). In-memory state: `instance_id → { slug, queue, waiter }` and a `slug → Set<instance_id>` index. `deliver(slug, text)` fans out to every registered instance for that slug; absent registration → drop with a log line.
 3. **Routing inbound Telegram → slug.**
    1. Primary: Telegram quote-reply. Every outbound belfry message records its `message_id → slug`; replying to one binds the message to that slug.
    2. Fallback: `/<slug-name> message body` for cold sends with no message to quote.
@@ -116,7 +116,7 @@ Slug derivation order (see `lib/slug.js` and `docs/CONVENTION.md`): `CLAUDE_SESS
 | `BELFRY_TOKEN` | yes | Bot token from @BotFather |
 | `BELFRY_CHAT_ID` | yes | Numeric chat ID where messages should land |
 | `BELFRY_FORUM_TOPIC_ID` | no | Forum topic ID, if posting to a Forum group's topic |
-| `BELFRY_MCP_PORT` | no | Override default MCP port (default `9876`) — Phase 1+ |
+| `BELFRY_MCP_PORT` | no | Override default MCP port (default `49876`, in the IANA dynamic range) |
 
 ## Privacy
 

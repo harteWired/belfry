@@ -51,7 +51,7 @@ async function main() {
   const botToken = (process.env.BELFRY_TOKEN ?? '').trim();
   const chatId = (process.env.BELFRY_CHAT_ID ?? '').trim();
   const forumTopicId = (process.env.BELFRY_FORUM_TOPIC_ID ?? '').trim();
-  const mcpPort = Number(process.env.BELFRY_MCP_PORT || 9876);
+  const mcpPort = Number(process.env.BELFRY_MCP_PORT || 49876);
   if (!botToken || !chatId) {
     log('missing BELFRY_TOKEN and/or BELFRY_CHAT_ID env vars — relay disabled');
     log('see README.md for setup. Common pattern: a launcher script reads from your secret store and exec-s belfry with the env vars set.');

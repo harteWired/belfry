@@ -37,7 +37,7 @@ import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { deriveSlug } from '../lib/slug.js';
 
-const DAEMON_BASE = (process.env.BELFRY_MCP_BASE || 'http://127.0.0.1:9876').replace(/\/$/, '');
+const DAEMON_BASE = (process.env.BELFRY_MCP_BASE || 'http://127.0.0.1:49876').replace(/\/$/, '');
 const RECV_TIMEOUT_MS = 30_000;
 const RECONNECT_BACKOFF_MS = 2_000;
 const MIN_RECV_LOOP_MS = 1_000;

@@ -42,7 +42,7 @@ belfry is the inverse: outbound-only at first, then bidirectional, multi-termina
 | `BELFRY_TOKEN` | yes | Bot token from @BotFather |
 | `BELFRY_CHAT_ID` | yes | Numeric chat ID where messages should land |
 | `BELFRY_FORUM_TOPIC_ID` | no | Forum topic ID, if posting to a Telegram Forum group's topic rather than a plain chat |
-| `BELFRY_MCP_PORT` | no | Local registry HTTP port (default `9876`). Bound to loopback only. The per-session MCP plugin uses `BELFRY_MCP_BASE` (default `http://127.0.0.1:9876`) to find the daemon. |
+| `BELFRY_MCP_PORT` | no | Local registry HTTP port (default `49876`, IANA dynamic range — avoids collision with fusion360-mcp and other tools that hardcode `9876`). Bound to loopback only. The per-session MCP plugin uses `BELFRY_MCP_BASE` (default `http://127.0.0.1:49876`) to find the daemon. |
 
 ## Architecture (one diagram)
 

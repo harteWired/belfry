@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { compose } from '../lib/composer.js';
+import { compose, composeDigest } from '../lib/composer.js';
 
 test('composes 3-line message with prompt + response', () => {
   const text = compose({
@@ -92,4 +92,33 @@ test('omits reply footer by default', () => {
     responseCap: 400,
   });
   assert.doesNotMatch(text, /Reply/);
+});
+
+test('composeDigest: includes count and summary body', () => {
+  const text = composeDigest({
+    slug: 'belfry',
+    displayName: 'belfry',
+    count: 3,
+    summary: 'Shipped feature.\nOne flake, recovered.',
+    replyFooter: true,
+  });
+  assert.match(text, /^📋 belfry — 3 events$/m);
+  assert.match(text, /Shipped feature\./);
+  assert.match(text, /One flake, recovered\./);
+  assert.match(text, /↩ Reply to drive$/);
+});
+
+test('composeDigest: pluralization (1 event)', () => {
+  const text = composeDigest({ slug: 'x', count: 1, summary: 's' });
+  assert.match(text, /— 1 event$/m);
+});
+
+test('composeDigest: falls back to latestStatus when summary is null', () => {
+  const text = composeDigest({
+    slug: 'x',
+    count: 5,
+    summary: null,
+    latestStatus: 'ready',
+  });
+  assert.match(text, /Latest: ready/);
 });

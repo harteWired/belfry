@@ -18,6 +18,14 @@
     },
     "financial-planner": {
       "events": ["ready"]
+    },
+    // Example: digest mode. Instead of pinging on every event, accumulate
+    // them in a buffer and send one Haiku-summarized rollup when the slug
+    // goes quiet (or when the windowMs cap is reached). Useful for chatty
+    // slugs you want to glance at, not triage in real-time.
+    "garden-assist": {
+      "events": ["ready", "error"],
+      "digest": true
     }
   },
 
@@ -33,5 +41,14 @@
 
   // Truncation caps for the prompt + response in each message (chars).
   "promptCap": 200,
-  "responseCap": 400
+  "responseCap": 400,
+
+  // Rollup-digest mode (per-slug opt-in via "digest": true on a subscription).
+  // When digest mode is on, events for that slug bypass the per-event throttle
+  // and accumulate in a buffer. The buffer flushes one summarized message
+  // when either the slug is quiet for digestIdleMs OR the total burst
+  // duration hits digestWindowMs (whichever comes first). Defaults: 15s
+  // idle, 60s window.
+  "digestIdleMs": 15000,
+  "digestWindowMs": 60000
 }

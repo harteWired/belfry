@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { summarize, _internals } from '../lib/summarizer.js';
+import { summarize, summarizeBatch, _internals } from '../lib/summarizer.js';
 
-const { makeCache, parseModelOutput, hashKey } = _internals;
+const { makeCache, parseModelOutput, hashKey, buildDigestUserMessage } = _internals;
 
 function fakeFetch(responses) {
   let i = 0;
@@ -185,4 +185,57 @@ test('makeCache: get bumps key to most-recent', () => {
   cache.set('c', 3); // should evict b
   assert.equal(cache.get('a'), 1);
   assert.equal(cache.get('b'), undefined);
+});
+
+test('summarizeBatch: returns digest text on success', async () => {
+  const fetchImpl = fakeFetch([jsonResponse('Shipped 2 features.\nOne error, recovered.')]);
+  const out = await summarizeBatch({
+    events: [
+      { status: 'ready', prompt: 'add feature A', response: 'done' },
+      { status: 'error', prompt: 'add feature B', response: 'failed' },
+      { status: 'ready', prompt: 'retry', response: 'done' },
+    ],
+    apiKey: 'sk-test',
+    fetchImpl,
+  });
+  assert.equal(out, 'Shipped 2 features.\nOne error, recovered.');
+});
+
+test('summarizeBatch: returns null on missing api key or empty events', async () => {
+  assert.equal(await summarizeBatch({ events: [{}], apiKey: '' }), null);
+  assert.equal(await summarizeBatch({ events: [], apiKey: 'sk' }), null);
+  assert.equal(await summarizeBatch({ events: null, apiKey: 'sk' }), null);
+});
+
+test('summarizeBatch: returns null on non-2xx', async () => {
+  const fetchImpl = fakeFetch([{ ok: false, status: 429, json: async () => ({}) }]);
+  const out = await summarizeBatch({
+    events: [{ status: 'ready', prompt: 'p', response: 'r' }],
+    apiKey: 'sk',
+    fetchImpl,
+  });
+  assert.equal(out, null);
+});
+
+test('summarizeBatch: returns null on empty model text', async () => {
+  const fetchImpl = fakeFetch([jsonResponse('   \n  ')]);
+  const out = await summarizeBatch({
+    events: [{ status: 'ready', prompt: 'p', response: 'r' }],
+    apiKey: 'sk',
+    fetchImpl,
+  });
+  assert.equal(out, null);
+});
+
+test('buildDigestUserMessage: formats events with status, prompt, response', () => {
+  const text = buildDigestUserMessage([
+    { status: 'ready', statusLabel: 'Done', prompt: 'a', response: 'b' },
+    { status: 'error', prompt: 'c' },
+  ]);
+  assert.match(text, /2 event\(s\)/);
+  assert.match(text, /#1 \[ready\] \(Done\)/);
+  assert.match(text, /user: a/);
+  assert.match(text, /claude: b/);
+  assert.match(text, /#2 \[error\]/);
+  assert.match(text, /user: c/);
 });

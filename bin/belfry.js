@@ -5,16 +5,17 @@ import { join, dirname } from 'node:path';
 import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 
-import { loadConfig, isSubscribed, isSummarized } from '../lib/config.js';
+import { loadConfig, isSubscribed, isSummarized, isDigested } from '../lib/config.js';
 import { StatusWatcher } from '../lib/watcher.js';
 import { Throttle } from '../lib/throttle.js';
-import { compose } from '../lib/composer.js';
+import { Digest } from '../lib/digest.js';
+import { compose, composeDigest } from '../lib/composer.js';
 import { sendMessage } from '../lib/telegram.js';
 import { ReplyTracker } from '../lib/reply-tracker.js';
 import { Registry } from '../lib/registry.js';
 import { Poller } from '../lib/poller.js';
 import { maybeAutoReply } from '../lib/auto-reply.js';
-import { summarize } from '../lib/summarizer.js';
+import { summarize, summarizeBatch } from '../lib/summarizer.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -156,6 +157,43 @@ async function main() {
     },
   });
 
+  // Optional rollup digest mode (#11). Slugs with subscriptions[slug].digest
+  // bypass the per-event throttle and feed into a per-slug rollup buffer
+  // that flushes after `digestIdleMs` of quiet (or `digestWindowMs` cap).
+  const digest = new Digest({
+    idleMs: config.digestIdleMs,
+    windowMs: config.digestWindowMs,
+    flush: async (slug, events) => {
+      const latest = events[events.length - 1];
+      const summary = anthropicApiKey
+        ? await summarizeBatch({
+            events: events.map((e) => ({
+              status: e.status,
+              statusLabel: e.statusFile?.statusLabel,
+              prompt: e.statusFile?.last_prompt,
+              response: e.statusFile?.last_response,
+            })),
+            apiKey: anthropicApiKey,
+          })
+        : null;
+      const text = composeDigest({
+        slug,
+        displayName: latest?.statusFile?.displayName ?? slug,
+        count: events.length,
+        summary,
+        latestStatus: latest?.status,
+        replyFooter: true,
+      });
+      try {
+        const result = await sendMessage({ botToken, chatId, text, forumTopicId });
+        if (result?.message_id) replyTracker.record(result.message_id, slug);
+        log(`sent ${slug}: digest ${events.length} events (${text.length} chars, msg ${result?.message_id})`);
+      } catch (err) {
+        log(`digest send failed for ${slug}: ${err.message}`);
+      }
+    },
+  });
+
   const watcher = new StatusWatcher({
     onUpdate: ({ slug, statusFile, prevStatusFile }) => {
       const newStatus = statusFile?.status;
@@ -178,7 +216,12 @@ async function main() {
       });
 
       if (!shouldFire(config, slug, prevStatus, newStatus)) return;
-      throttle.enqueue(slug, { status: newStatus, event: statusFile.event, statusFile });
+      const event = { status: newStatus, event: statusFile.event, statusFile };
+      if (isDigested(config, slug)) {
+        digest.enqueue(slug, event);
+      } else {
+        throttle.enqueue(slug, event);
+      }
     },
     log,
   });
@@ -188,6 +231,7 @@ async function main() {
   const shutdown = async (signal) => {
     log(`received ${signal} — shutting down`);
     throttle.clearAll();
+    digest.flushAll();
     await poller.stop();
     await registry.stop();
     await watcher.stop();

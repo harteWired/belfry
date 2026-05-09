@@ -15,7 +15,7 @@ import { ReplyTracker } from '../lib/reply-tracker.js';
 import { Registry } from '../lib/registry.js';
 import { Poller } from '../lib/poller.js';
 import { maybeAutoReply } from '../lib/auto-reply.js';
-import { summarize, summarizeBatch } from '../lib/summarizer.js';
+import { makeBrainSummarizers } from '../lib/brain-summarize.js';
 import { makeStatusHandler } from '../lib/status-handler.js';
 import { makeDigestFlush } from '../lib/digest-flush.js';
 import { NicknameRegistry } from '../lib/nicknames.js';
@@ -72,27 +72,14 @@ async function main() {
   }
   log(`telegram bot configured (chat ${chatId}${forumTopicId ? `, topic ${forumTopicId}` : ''})`);
 
-  // Optional Haiku summarizer + conversational agent + per-slug /status digest.
-  // Per-slug opt-in via subscriptions[slug].summarize in belfry.jsonc.
-  // Without the env, summarize/digest fall back to truncate, the agent
-  // declines with a "no API key" message, and /help still works.
-  //
-  // Always log the key status at startup so a misconfigured launcher (e.g.
-  // empty value exported from a missing secret store entry) is visible
-  // before the user hits the agent and gets a confusing decline.
-  const anthropicApiKey = (process.env.ANTHROPIC_API_KEY ?? '').trim();
-  if (anthropicApiKey) {
-    const enabledSlugs = Object.entries(config.subscriptions)
-      .filter(([, s]) => s.summarize)
-      .map(([slug]) => slug);
-    log(`ANTHROPIC_API_KEY configured (${anthropicApiKey.length} chars) — agent + summarizer live`);
-    if (enabledSlugs.length > 0) {
-      log(`summarizer enabled for ${enabledSlugs.length} slug(s): ${enabledSlugs.join(', ')}`);
-    }
-  } else {
-    log('ANTHROPIC_API_KEY unset or empty — conversational agent will decline; summarizer falls back to truncate');
+  // Per-slug summarizer / digest opt-in via subscriptions[slug].summarize.
+  // Both run via the brain subprocess (subscription auth — see lib/brain.js).
+  const enabledSummarizeSlugs = Object.entries(config.subscriptions)
+    .filter(([, s]) => s.summarize)
+    .map(([slug]) => slug);
+  if (enabledSummarizeSlugs.length > 0) {
+    log(`summarizer enabled for ${enabledSummarizeSlugs.length} slug(s): ${enabledSummarizeSlugs.join(', ')}`);
   }
-
 
   // Inbound: per-session belfry-mcp plugins register here. The poller routes
   // each Telegram reply to the slug's registered plugin(s) which inject the
@@ -163,32 +150,14 @@ async function main() {
   if (config.nicknames) nicknames.bootstrap(config.nicknames);
   log(`nicknames loaded: ${Object.keys(nicknames.list()).length} entr${Object.keys(nicknames.list()).length === 1 ? 'y' : 'ies'}`);
 
-  // Rate-limited summarizer failure logger. Without this, repeated 401s on
-  // a bad key spam stderr once per ping. We log each category at most once
-  // per minute — enough to tell "key is invalid" from "Anthropic 5xx" from
-  // "network gone" without flooding logs in steady-state failure.
-  const summarizerLogState = new Map();
-  const SUMMARIZER_LOG_WINDOW_MS = 60_000;
-  const logSummarizerFailure = (category, detail) => {
-    const now = Date.now();
-    const last = summarizerLogState.get(category) ?? 0;
-    if (now - last < SUMMARIZER_LOG_WINDOW_MS) return;
-    summarizerLogState.set(category, now);
-    log(`summarizer ${category}${detail ? ` (${detail})` : ''}`);
-  };
-
-  // Two thin wrappers around the summarizer so each callsite (throttle
-  // dispatch, digest flush, /status handler) shares one "is the API key
-  // present? then summarize, else null" path. Both return null when
-  // disabled — callers fall back to the truncate / raw-text path.
-  const maybeSummarize = anthropicApiKey
-    ? (args) => summarize({ ...args, apiKey: anthropicApiKey, logFailure: logSummarizerFailure })
-    : async () => null;
-  const maybeSummarizeBatch = anthropicApiKey
-    ? (args) => summarizeBatch({ ...args, apiKey: anthropicApiKey, logFailure: logSummarizerFailure })
-    : async () => null;
+  // Brain-backed summarizers. Constructed here so statusHandler can reference
+  // them; they close over the `brain` variable (which is constructed below)
+  // and use it lazily — every call resolves brain.isAlive() fresh.
+  const brainSummarizers = { summarize: async () => null, summarizeBatch: async () => null };
+  const maybeSummarize = (args) => brainSummarizers.summarize(args);
+  const maybeSummarizeBatch = (args) => brainSummarizers.summarizeBatch(args);
   const statusHandler = makeStatusHandler({
-    summarizeFn: anthropicApiKey ? maybeSummarize : null,
+    summarizeFn: maybeSummarize,
     send: ({ text, replyToMessageId }) =>
       sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
     // For single-slug /status, record the digest message_id against the
@@ -277,6 +246,14 @@ async function main() {
   });
   brain.start();
   log(`brain: spawned (cwd ${brainDir})`);
+
+  // Bind the brain-backed summarizers now that brain exists. The
+  // closure-captured object reference threaded into statusHandler /
+  // throttle / digestFlush above gets its methods replaced, so callers
+  // see the live functions on first use.
+  const realSummarizers = makeBrainSummarizers({ brain, log });
+  brainSummarizers.summarize = realSummarizers.summarize;
+  brainSummarizers.summarizeBatch = realSummarizers.summarizeBatch;
 
   // Wire the brain MCP plugin's tool handlers. The watcher is built later
   // in this main() — handlers receive a getter so they read it fresh each
@@ -392,7 +369,7 @@ async function main() {
   const digestFlush = makeDigestFlush({
     promptCap: config.promptCap,
     responseCap: config.responseCap,
-    summarizeBatchFn: anthropicApiKey ? maybeSummarizeBatch : null,
+    summarizeBatchFn: maybeSummarizeBatch,
     send: ({ slug, text }) => sendMessage({ botToken, chatId, text, forumTopicId: topicForSlug(slug) }),
     recordReply: (msgId, slug) => replyTracker.record(msgId, slug),
     recordRecent: (slug, entry) => recentMessages.push(slug, entry),

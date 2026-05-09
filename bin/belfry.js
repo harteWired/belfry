@@ -27,7 +27,6 @@ import { ConversationMemory } from '../lib/conversation-memory.js';
 import { ApprovalTokens } from '../lib/approval-tokens.js';
 import { makeApprovalHandler } from '../lib/approval-handler.js';
 import { approvalKeyboard } from '../lib/telegram.js';
-import { transcribe } from '../lib/transcribe.js';
 import { makeResumeHandler } from '../lib/resume-handler.js';
 import { getHelpText } from '../lib/help-text.js';
 
@@ -93,15 +92,6 @@ async function main() {
     log('ANTHROPIC_API_KEY unset or empty — conversational agent will decline; summarizer falls back to truncate');
   }
 
-  // Optional voice-note transcription (#19). Defaults to Groq's
-  // whisper-large-v3-turbo. Without the env, voice messages drop with a
-  // polite Telegram reply explaining how to enable.
-  const transcribeKey = (process.env.BELFRY_TRANSCRIBE_KEY ?? '').trim();
-  if (transcribeKey) {
-    log(`BELFRY_TRANSCRIBE_KEY configured (${transcribeKey.length} chars) — voice transcription live (Groq Whisper)`);
-  } else {
-    log('BELFRY_TRANSCRIBE_KEY unset — voice notes will get a "set the key" reply and drop');
-  }
 
   // Inbound: per-session belfry-mcp plugins register here. The poller routes
   // each Telegram reply to the slug's registered plugin(s) which inject the
@@ -121,8 +111,8 @@ async function main() {
   const tokenPath = join(stateDir, 'registry.token');
   const authToken = ensureAuthToken(tokenPath);
 
-  // Scratch directory for inbound attachments (Telegram photos / voice
-  // notes downloaded for forwarding to sessions). 0700 dir, 0600 files —
+  // Scratch directory for inbound attachments (Telegram photos downloaded
+  // for forwarding to sessions). 0700 dir, 0600 files —
   // payloads can be sensitive (screenshots of work) so other UIDs on the
   // host shouldn't read them. GC on startup drops anything older than 24h
   // since by then the receiving session has either consumed the file or
@@ -301,24 +291,6 @@ async function main() {
     resolveNickname: (token) => nicknames.resolve(token),
     resolveTopic: (id) => topicMap.get(id) ?? null,
     attachmentDir,
-    transcribeFn: transcribeKey
-      ? ({ audioPath }) => transcribe({ apiKey: transcribeKey, audioPath, logFailure: logSummarizerFailure })
-      : null,
-    onVoiceWithoutKey: async ({ messageId }) => {
-      try {
-        // Match the rest of the file's outbound calls — pass forumTopicId
-        // so the reply lands in the configured topic on forum groups.
-        await sendMessage({
-          botToken,
-          chatId,
-          text: 'voice notes need BELFRY_TRANSCRIBE_KEY set in the daemon env (Groq, free tier works).',
-          forumTopicId,
-          replyToMessageId: messageId,
-        });
-      } catch (err) {
-        log(`voice no-key reply failed: ${err.message}`);
-      }
-    },
     log,
   });
   poller.start();

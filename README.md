@@ -39,9 +39,8 @@ Slugs always win over nicknames on collision — a session literally named `ob` 
 ## Inbound attachments
 
 - **Photos** — Telegram photos with a caption that routes (slug-prefix, nickname, or quote-reply) get downloaded (4 MB cap) and forwarded to the receiving session via the channel notification's `image_path` field. Bare photos with no caption and no quote-reply are dropped — caption-or-quote tells belfry where to send it.
-- **Voice notes** — when `BELFRY_TRANSCRIBE_KEY` is set (Groq's free tier covers any single-user volume), inbound voice messages get transcribed via Whisper-large-v3-turbo and routed as if you'd typed the transcript. 60-second cap. Without the key, voice messages get a polite reply explaining how to enable.
 
-Both attachment types respect the existing trust boundary — only messages from `BELFRY_CHAT_ID` ever hit the network/disk side-effect path.
+The attachment path respects the existing trust boundary — only messages from `BELFRY_CHAT_ID` ever hit the network/disk side-effect path.
 
 ## Approval buttons
 
@@ -98,7 +97,6 @@ belfry is the inverse: outbound-only at first, then bidirectional, multi-termina
 | `BELFRY_FORUM_TOPIC_ID` | no | Default forum topic ID for slugs without per-slug `topic` overrides. Per-slug `topic` in `belfry.jsonc` takes precedence. |
 | `BELFRY_MCP_PORT` | no | Local registry HTTP port (default `49876`, IANA dynamic range — avoids collision with fusion360-mcp and other tools that hardcode `9876`). Bound to loopback only. The per-session MCP plugin uses `BELFRY_MCP_BASE` (default `http://127.0.0.1:49876`) to find the daemon. |
 | `ANTHROPIC_API_KEY` | no | Enables the Haiku summarizer (per-message + digest), the conversational agent, and the agent's tool catalog. Without it those features fail open to truncate / decline. |
-| `BELFRY_TRANSCRIBE_KEY` | no | Enables voice-note transcription via Groq's Whisper endpoint. Without it, voice messages get a polite "set this env to enable" reply and drop. |
 | `BELFRY_RESUME_LAUNCHER` | no | Optional command/script. When set, `/resume <slug> <uuid>` execs it as a detached subprocess with `BELFRY_RESUME_CMD` / `BELFRY_RESUME_CWD` / `BELFRY_RESUME_UUID` / `BELFRY_RESUME_SLUG` in env. Without it, `/resume` emits a copyable `cd <cwd> && claude --resume <uuid>` command for you to paste. |
 
 ## Architecture (one diagram)

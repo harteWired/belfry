@@ -16,7 +16,33 @@ Two flows, one daemon.
 
 **Replying to Telegram from the session.** Two paths. The model can call belfry-mcp's `reply` tool to send back explicitly. Or, automatically: when an inbound Telegram message routes into a session, the daemon marks the slug as owing a reply; on the next status flip to `ready` for that slug, it sends `last_response` quote-replied to the originating message and clears the marker.
 
-Routing inbound: quote-reply (primary) or `/<slug-name> message body` (fallback). Replies from any chat ID other than `BELFRY_CHAT_ID` are silently dropped.
+Routing inbound: quote-reply (primary) or `/<slug-name> message body` or `/<nickname> body` (slug aliases). Anything else falls into the conversational layer — described below. Replies from any chat ID other than `BELFRY_CHAT_ID` are silently dropped.
+
+## Commands
+
+The leading slash is optional on every command — `status` works the same as `/status`. Phone keyboards make the slash a tap-and-hold detour, so belfry accepts both.
+
+| Command | What it does |
+|---|---|
+| `status` | List every active session, one line each |
+| `status <slug>` | Recent activity for one session, Haiku-summarized if `ANTHROPIC_API_KEY` is set |
+| `nick <name> <slug>` | Alias a slug to a short name. Names: `[a-z0-9][a-z0-9-]{0,31}` |
+| `unnick <name>` | Remove an alias |
+| `nicks` | List all aliases |
+| `help [topic]` | Reference text. Topics: `routing`, `nicknames`, `status`, `agent` |
+
+Slugs always win over nicknames on collision — a session literally named `ob` beats a nickname `ob`. Reserved names (`status`, `nick`, `unnick`, `nicks`, `help`) cannot be used as nicknames.
+
+## Conversational layer
+
+Anything that isn't a command, slug-prefix, or quote-reply goes to a Haiku-backed classifier (requires `ANTHROPIC_API_KEY`). It picks one of four intents:
+
+- **ask** — answers questions about belfry, sessions, and state. *"what's life-planner been up to?"* / *"how do nicknames work?"* / *"show me everything that errored today"*.
+- **route** — forwards a message to a specific session. *"ask the api session to retry the deploy"* / *"obsidian start indexing the inbox"*.
+- **ambiguous** — when several slugs plausibly match, lists candidates and asks you to pick. Reply with the slug name or quote-reply.
+- **decline** — politely punts on genuinely off-topic requests (weather, general LLM chat).
+
+The agent has a short conversation memory (last few turns, ~10 minutes idle window) so follow-ups like *"and what about the other one?"* have context. Without `ANTHROPIC_API_KEY`, this layer falls back to a polite "try /help" reply.
 
 ## Why belfry exists
 

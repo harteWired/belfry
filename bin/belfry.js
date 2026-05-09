@@ -211,6 +211,7 @@ async function main() {
         return { error: err.message };
       }
     },
+    getHelp: getHelpText,
     send: ({ text, replyToMessageId }) =>
       sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
     deliver: (slug, text, messageId) => registry.deliver(slug, text, messageId),

@@ -81,7 +81,6 @@ test('fastPathRoute: misses for unknown first token', () => {
 });
 
 test('fastPathRoute: question after a slug name falls through (not imperative)', () => {
-  // "belfry how are you?" — question, not a command. Agent should classify.
   const cases = [
     'belfry how are you doing?',
     'belfry what is the status',
@@ -99,11 +98,34 @@ test('fastPathRoute: question after a slug name falls through (not imperative)',
   }
 });
 
+test('fastPathRoute: greetings and short comments fall through', () => {
+  // These bypass fast-path so the agent can answer conversationally
+  // instead of forwarding "hello" or "thanks" into a Claude session.
+  const cases = [
+    'belfry hello',
+    'belfry hi',
+    'belfry thanks',
+    'belfry good morning',
+    'belfry good',
+  ];
+  for (const text of cases) {
+    const out = fastPathRoute({
+      text,
+      activeSlugs: ['belfry'],
+      resolveNickname: () => null,
+    });
+    assert.equal(out, null, `should not fast-path: ${text}`);
+  }
+});
+
 test('fastPathRoute: imperative shapes still fast-path', () => {
   const cases = [
     'belfry restart please',
     'belfry run the deploy',
     'belfry fix the failing test',
+    'belfry, restart now', // comma after head still works
+    'belfry: deploy production', // colon after head still works
+    'belfry please run the entire test suite now', // ≥3 words, no interrogative
   ];
   for (const text of cases) {
     const out = fastPathRoute({

@@ -33,6 +33,7 @@ const baseDeps = (overrides = {}) => ({
   getActiveSlugs: () => new Set(['belfry']),
   statusDir: '/nowhere',
   readStatus: () => ({ error: 'stubbed' }),
+  getHelp: (topic) => `(help for ${topic})`,
   send: fakeSender(),
   deliver: fakeDeliver(),
   recordReply: () => {},

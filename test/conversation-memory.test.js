@@ -36,10 +36,20 @@ test('trim: caps to maxChars (drops oldest, keeps at least 1)', () => {
   m.push('chatA', { role: 'user', text: 'b'.repeat(15) });
   m.push('chatA', { role: 'user', text: 'c'.repeat(15) });
   const turns = m.recent('chatA');
-  // Total is 45 chars > 20, oldest gets dropped until under or only 1 left.
-  // After drops: 'cccccc...' (15) only, since 30 > 20 still after dropping a.
   assert.ok(turns.length >= 1);
   assert.ok(turns.length <= 2);
+  // The combined char budget must hold even after dropping older turns.
+  const total = turns.reduce((acc, t) => acc + t.text.length, 0);
+  assert.ok(total <= 20, `total ${total} should be ≤ maxChars 20`);
+});
+
+test('trim: single turn larger than maxChars gets truncated, not retained intact', () => {
+  const m = new ConversationMemory({ maxTurns: 100, maxChars: 50 });
+  const big = 'X'.repeat(200);
+  m.push('chatA', { role: 'user', text: big });
+  const turns = m.recent('chatA');
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].text.length, 50, 'oversized single turn should be truncated to maxChars');
 });
 
 test('idle expiry: clears buffer after idleMs', () => {

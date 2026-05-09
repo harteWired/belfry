@@ -23,12 +23,13 @@ import { makeNickHandler } from '../lib/nick-handler.js';
 import { makeHelpHandler } from '../lib/help-handler.js';
 import { RecentMessages } from '../lib/recent-messages.js';
 import { makeAgentHandler } from '../lib/agent-handler.js';
-import { ConversationMemory } from '../lib/conversation-memory.js';
 import { ApprovalTokens } from '../lib/approval-tokens.js';
 import { makeApprovalHandler } from '../lib/approval-handler.js';
 import { approvalKeyboard } from '../lib/telegram.js';
 import { makeResumeHandler } from '../lib/resume-handler.js';
-import { getHelpText } from '../lib/help-text.js';
+import { BrainSupervisor } from '../lib/brain.js';
+import { BRAIN_SYSTEM_PROMPT } from '../lib/brain-prompt.js';
+import { makeBrainHandlers } from '../lib/brain-handlers.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -239,33 +240,64 @@ async function main() {
   // immediately. getActiveSlugs uses the in-memory cache (no readdir on
   // every Telegram message); the cold-path /nick validation in
   // NicknameRegistry uses the readdir variant directly via watcher.getActiveSlugs.
-  // Per-chat memory keeps recent turns in the classify prompt so follow-ups
-  // and disambiguation replies have context.
-  const conversationMemory = new ConversationMemory();
-  const agentHandler = makeAgentHandler({
-    apiKey: anthropicApiKey,
-    nicknames,
+  //
+  // Brain subprocess: spawned at startup, owns all language work. The
+  // agent handler simply forwards CLASSIFY prompts to the brain and falls
+  // back to "language layer is down" when isAlive() is false. The brain
+  // takes user-visible actions (reply / deliver / decline) via its MCP
+  // tools, dispatching through the daemon's /brain/* endpoints.
+  const brainDir = join(stateDir, 'brain');
+  mkdirSync(brainDir, { recursive: true, mode: 0o700 });
+  const brainMcpConfigPath = join(brainDir, '.mcp.json');
+  writeFileSync(
+    brainMcpConfigPath,
+    JSON.stringify(
+      {
+        mcpServers: {
+          'belfry-brain': {
+            command: 'node',
+            args: [join(dirname(fileURLToPath(import.meta.url)), 'belfry-brain-mcp.js')],
+            env: {
+              BELFRY_MCP_BASE: `http://127.0.0.1:${mcpPort}`,
+              BELFRY_BRAIN_TOKEN_PATH: tokenPath,
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    { mode: 0o600 },
+  );
+  const brain = new BrainSupervisor({
+    workdir: brainDir,
+    mcpConfigPath: brainMcpConfigPath,
+    systemPrompt: BRAIN_SYSTEM_PROMPT,
+    log,
+  });
+  brain.start();
+  log(`brain: spawned (cwd ${brainDir})`);
+
+  // Wire the brain MCP plugin's tool handlers. The watcher is built later
+  // in this main() — handlers receive a getter so they read it fresh each
+  // call. Until the watcher is up, list_sessions / get_session return
+  // empty (the brain handles that gracefully via its `recent_messages`
+  // tool which uses the in-memory ring instead).
+  const brainHandlers = makeBrainHandlers({
+    getWatcher: () => watcher,
     recentMessages,
-    memory: conversationMemory,
-    chatId: Number(chatId),
-    getActiveSlugs: () => (watcher ? watcher.getActiveSlugsFromCache() : new Set()),
-    statusDir: undefined, // resolved by readStatus closure below
-    readStatus: (slug, activeSlugSet) => {
-      if (!activeSlugSet.has(slug)) return { error: `no active session named '${slug}'` };
-      try {
-        const file = join(watcher.statusDir, `${slug}.json`);
-        const raw = readFileSync(file, 'utf8');
-        return JSON.parse(raw);
-      } catch (err) {
-        return { error: err.message };
-      }
-    },
-    getHelp: getHelpText,
+    nicknames,
+    registry,
+    sendTelegram: ({ text, replyToMessageId }) =>
+      sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
+    log,
+  });
+  registry.setBrainHandlers(brainHandlers);
+
+  const agentHandler = makeAgentHandler({
+    brain,
     send: ({ text, replyToMessageId }) =>
       sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
-    deliver: (slug, text, messageId) => registry.deliver(slug, text, messageId),
-    recordReply: (msgId, slug) => replyTracker.record(msgId, slug),
-    logFailure: logSummarizerFailure, // share the rate-limited bucket
     log,
   });
 
@@ -411,6 +443,7 @@ async function main() {
     throttle.clearAll();
     await digest.flushAll();
     await poller.stop();
+    await brain.stop();
     await registry.stop();
     await watcher.stop();
     replyTracker.flush(); // sync flush of any debounced setImmediate save

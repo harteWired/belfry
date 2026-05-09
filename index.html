@@ -51,7 +51,7 @@
        Pasted verbatim from web-design-pipeline/shells/portfolio-shell.css
        Patch the source file first, then re-paste here.
        ============================================================ */
-    /* SHELL_VERSION: 1.1.1 */
+    /* SHELL_VERSION: 1.1.0 */
 
     :root {
       --color-ink:    oklch(0.13 0.015 270);
@@ -154,9 +154,8 @@
     .skip-link { position: fixed; top: var(--space-md); left: var(--space-md); z-index: calc(var(--z-overlay) + 100); padding: var(--space-sm) var(--space-md); background: var(--color-accent-primary); color: var(--color-bg-base); font-family: var(--font-body); font-weight: var(--font-weight-semibold); font-size: var(--text-sm); border-radius: var(--radius-sm); transform: translateY(-200%); transition: transform var(--duration-micro) var(--ease-standard); }
     .skip-link:focus { transform: translateY(0); }
 
-    /* shell 1.1.1: no mix-blend-mode (Firefox/Windows flicker); spotlight on dedicated GPU layer */
-    .grain { position: fixed; inset: 0; z-index: 9999; pointer-events: none; opacity: 0.08; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); background-repeat: repeat; background-size: 256px 256px; }
-    .cursor-spotlight { position: fixed; top: 0; left: 0; width: var(--cursor-spotlight-size); height: var(--cursor-spotlight-size); border-radius: 50%; background: radial-gradient(circle, var(--color-accent-glow) 0%, transparent 70%); pointer-events: none; z-index: var(--z-bg-effect); opacity: 0; transform: translate(-50%, -50%) translateZ(0); will-change: transform; transition: opacity var(--duration-entrance) var(--ease-standard); }
+    .grain { position: fixed; inset: 0; z-index: 9999; pointer-events: none; opacity: var(--bg-effect-opacity); mix-blend-mode: overlay; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); background-repeat: repeat; background-size: 256px 256px; }
+    .cursor-spotlight { position: fixed; top: 0; left: 0; width: var(--cursor-spotlight-size); height: var(--cursor-spotlight-size); border-radius: 50%; background: radial-gradient(circle, var(--color-accent-glow) 0%, transparent 70%); pointer-events: none; z-index: var(--z-bg-effect); opacity: 0; transform: translate(-50%, -50%); transition: opacity var(--duration-entrance) var(--ease-standard); }
     body:hover .cursor-spotlight { opacity: 1; }
 
     .morphing-blobs { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
@@ -561,7 +560,7 @@
       var spot = document.querySelector('.cursor-spotlight');
       if (!spot) return;
       var raf = null, x = 0, y = 0;
-      function paint() { spot.style.transform = 'translate(' + (x | 0) + 'px, ' + (y | 0) + 'px) translate(-50%, -50%) translateZ(0)'; raf = null; }
+      function paint() { spot.style.transform = 'translate(' + x + 'px, ' + y + 'px) translate(-50%, -50%)'; raf = null; }
       window.addEventListener('pointermove', function(e) { x = e.clientX; y = e.clientY; if (!raf) raf = requestAnimationFrame(paint); }, { passive: true });
     })();
 

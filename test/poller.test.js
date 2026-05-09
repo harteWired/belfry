@@ -363,6 +363,94 @@ test('tick: bare "status" (no slash) routes to onStatusRequest', async () => {
   assert.equal(seen[0].slug, null);
 });
 
+test('tick: callback_query routes to onApproval when prefix matches and chat is expected', async () => {
+  const updates = [
+    {
+      update_id: 1300,
+      callback_query: {
+        id: 'q1',
+        from: { id: CHAT },
+        message: { message_id: 50, chat: { id: CHAT } },
+        data: 'belfry:allow:tok123',
+      },
+    },
+  ];
+  const replyTracker = new ReplyTracker();
+  const target = fakeTarget();
+  const seen = [];
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker,
+    target,
+    fetchFn: fakeOk(updates),
+    onApproval: async (a) => { seen.push(a); },
+  });
+  await poller.tick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].callbackQueryId, 'q1');
+  assert.equal(seen[0].verb, 'allow');
+  assert.equal(seen[0].token, 'tok123');
+  assert.equal(seen[0].messageId, 50);
+});
+
+test('tick: callback_query from wrong chat is dropped', async () => {
+  const updates = [
+    {
+      update_id: 1400,
+      callback_query: {
+        id: 'q2',
+        from: { id: 99999 },
+        message: { message_id: 50, chat: { id: 99999 } },
+        data: 'belfry:allow:tok',
+      },
+    },
+  ];
+  const replyTracker = new ReplyTracker();
+  const target = fakeTarget();
+  const seen = [];
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker,
+    target,
+    fetchFn: fakeOk(updates),
+    onApproval: async (a) => { seen.push(a); },
+  });
+  await poller.tick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(seen.length, 0);
+});
+
+test('tick: callback_query without belfry: prefix is dropped (foreign data)', async () => {
+  const updates = [
+    {
+      update_id: 1500,
+      callback_query: {
+        id: 'q3',
+        from: { id: CHAT },
+        message: { message_id: 50, chat: { id: CHAT } },
+        data: 'someotherbot:do:something',
+      },
+    },
+  ];
+  const replyTracker = new ReplyTracker();
+  const target = fakeTarget();
+  const seen = [];
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker,
+    target,
+    fetchFn: fakeOk(updates),
+    onApproval: async (a) => { seen.push(a); },
+  });
+  await poller.tick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(seen.length, 0);
+});
+
 test('tick: photo with caption downloads, routes via caption, delivers with attachment', async () => {
   // Telegram returns getFile then the file body. We stub fetch by the URL
   // shape: getUpdates → updates payload; getFile → file path; final fetch →

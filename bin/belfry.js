@@ -24,6 +24,9 @@ import { makeHelpHandler } from '../lib/help-handler.js';
 import { RecentMessages } from '../lib/recent-messages.js';
 import { makeAgentHandler } from '../lib/agent-handler.js';
 import { ConversationMemory } from '../lib/conversation-memory.js';
+import { ApprovalTokens } from '../lib/approval-tokens.js';
+import { makeApprovalHandler } from '../lib/approval-handler.js';
+import { approvalKeyboard } from '../lib/telegram.js';
 import { getHelpText } from '../lib/help-text.js';
 
 function log(msg) {
@@ -194,6 +197,19 @@ async function main() {
     log,
   });
 
+  // Approval tokens for inline-keyboard taps on `waiting` pings (#17).
+  // The throttle dispatch issues a token per waiting message; tap callbacks
+  // resolve back to (slug, messageId) and inject the chosen verb as session
+  // input, then edit the prompt to drop the keyboard + show outcome.
+  const approvalTokens = new ApprovalTokens();
+  const approvalHandler = makeApprovalHandler({
+    botToken,
+    chatId,
+    approvalTokens,
+    registry,
+    log,
+  });
+
   // Conversational agent (#13). Activates only when ANTHROPIC_API_KEY is
   // set; otherwise the handler still runs but classify() returns a decline
   // immediately. getActiveSlugs uses the in-memory cache (no readdir on
@@ -237,6 +253,7 @@ async function main() {
     onStatusRequest: statusHandler,
     onNickRequest: nickHandler,
     onHelpRequest: helpHandler,
+    onApproval: approvalHandler,
     onUnmatched: agentHandler,
     resolveNickname: (token) => nicknames.resolve(token),
     attachmentDir,
@@ -275,10 +292,30 @@ async function main() {
         replyFooter: true,
       });
       try {
-        const result = await sendMessage({ botToken, chatId, text, forumTopicId });
-        if (result?.message_id) replyTracker.record(result.message_id, slug);
+        // For `waiting` events (Claude Code blocked on a permission prompt
+        // or notification), include an inline keyboard with Allow/Deny/
+        // Always/Defer. We issue a token now, send the message with the
+        // keyboard pointing at the token, then patch the token entry with
+        // the assigned message_id once Telegram returns it. The token has
+        // the slug + (eventually) the message_id so the callback handler
+        // can deliver the answer + edit the right message.
+        let replyMarkup;
+        let tokenForThis = null;
+        if (event.status === 'waiting') {
+          tokenForThis = approvalTokens.issue(slug, null, text);
+          replyMarkup = approvalKeyboard(tokenForThis);
+        }
+        const result = await sendMessage({ botToken, chatId, text, forumTopicId, replyMarkup });
+        if (result?.message_id) {
+          replyTracker.record(result.message_id, slug);
+          // Patch the token entry's messageId now that we have it.
+          if (tokenForThis) {
+            const entry = approvalTokens.entries.get(tokenForThis);
+            if (entry) entry.messageId = result.message_id;
+          }
+        }
         recentMessages.push(slug, { kind: 'event', text });
-        log(`sent ${slug}: ${event.status} (${text.length} chars, msg ${result?.message_id})`);
+        log(`sent ${slug}: ${event.status} (${text.length} chars, msg ${result?.message_id}${tokenForThis ? `, +approval-buttons` : ''})`);
       } catch (err) {
         log(`send failed for ${slug}: ${err.message}`);
       }

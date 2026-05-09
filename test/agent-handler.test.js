@@ -35,8 +35,22 @@ test('happy path: forwards a CLASSIFY prompt to the brain with the originating m
   assert.match(brain.calls[0], /CLASSIFY/);
   assert.match(brain.calls[0], /Originating message_id: 42/);
   assert.match(brain.calls[0], /how is belfry doing\?/);
-  // Sender NOT called directly — the brain's tools handle reply_to_telegram out-of-band.
+  // Sender NOT called directly when brain returns empty — the brain's
+  // tools handle reply_to_telegram out-of-band.
   assert.equal(send.calls.length, 0);
+});
+
+test('text fallback: brain returns non-empty text → forward to Telegram', async () => {
+  const brain = fakeBrain({
+    sendImpl: () => 'sorry I cannot help with that',
+  });
+  const send = fakeSender();
+  const h = makeAgentHandler({ brain, send });
+  await h({ text: 'whatever', messageId: 50 });
+  // Brain's text reaches the user via the fallback path.
+  assert.equal(send.calls.length, 1);
+  assert.equal(send.calls[0].text, 'sorry I cannot help with that');
+  assert.equal(send.calls[0].replyToMessageId, 50);
 });
 
 test('brain down: replies with the "language layer is down" fallback', async () => {

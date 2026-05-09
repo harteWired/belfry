@@ -20,6 +20,8 @@ import { makeStatusHandler } from '../lib/status-handler.js';
 import { makeDigestFlush } from '../lib/digest-flush.js';
 import { NicknameRegistry } from '../lib/nicknames.js';
 import { makeNickHandler } from '../lib/nick-handler.js';
+import { RecentMessages } from '../lib/recent-messages.js';
+import { makeAgentHandler } from '../lib/agent-handler.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -98,12 +100,20 @@ async function main() {
   const tokenPath = join(stateDir, 'registry.token');
   const authToken = ensureAuthToken(tokenPath);
 
+  // In-memory ring of recent outbound messages per slug. Read by the
+  // conversational agent's `recent_messages` tool to answer "what's been
+  // happening with X?" without going to disk. Non-persistent — a daemon
+  // restart drops the rings; we don't write history to disk because the
+  // dashboard JSON is already there.
+  const recentMessages = new RecentMessages();
+
   // Outbound dispatcher used by both the spoke `reply` tool (via /send) and
   // the auto-reply path below. Records the new message_id in the reply
   // tracker so subsequent quote-replies on this thread route correctly.
   const sendOutbound = async ({ slug, text, replyToMessageId }) => {
     const result = await sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId });
     if (result?.message_id) replyTracker.record(result.message_id, slug);
+    recentMessages.push(slug, { kind: 'outbound', text });
     log(`sent ${slug}: outbound reply (${text.length} chars, msg ${result?.message_id}${replyToMessageId ? `, in reply to ${replyToMessageId}` : ''})`);
     return { message_id: result?.message_id };
   };
@@ -166,6 +176,23 @@ async function main() {
     log,
   });
 
+  // Conversational agent (#13). Activates only when ANTHROPIC_API_KEY is
+  // set; otherwise the handler still runs but classify() returns a decline
+  // immediately. Forward-declared so it can read watcherRef like nicknames does.
+  let watcherForAgent = null;
+  const agentHandler = makeAgentHandler({
+    apiKey: anthropicApiKey,
+    nicknames,
+    recentMessages,
+    watcher: { get statusDir() { return watcherForAgent?.statusDir; }, getActiveSlugs: () => (watcherForAgent ? watcherForAgent.getActiveSlugs() : new Set()) },
+    send: ({ text, replyToMessageId }) =>
+      sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
+    deliver: (slug, text, messageId) => registry.deliver(slug, text, messageId),
+    recordReply: (msgId, slug) => replyTracker.record(msgId, slug),
+    logFailure: logSummarizerFailure, // share the rate-limited bucket
+    log,
+  });
+
   const poller = new Poller({
     botToken,
     expectedChatId: Number(chatId),
@@ -173,6 +200,7 @@ async function main() {
     target: registry,
     onStatusRequest: statusHandler,
     onNickRequest: nickHandler,
+    onUnmatched: agentHandler,
     resolveNickname: (token) => nicknames.resolve(token),
     log,
   });
@@ -211,6 +239,7 @@ async function main() {
       try {
         const result = await sendMessage({ botToken, chatId, text, forumTopicId });
         if (result?.message_id) replyTracker.record(result.message_id, slug);
+        recentMessages.push(slug, { kind: 'event', text });
         log(`sent ${slug}: ${event.status} (${text.length} chars, msg ${result?.message_id})`);
       } catch (err) {
         log(`send failed for ${slug}: ${err.message}`);
@@ -269,6 +298,7 @@ async function main() {
   });
   watcher.start();
   watcherRef = watcher;
+  watcherForAgent = watcher;
   log('belfry up');
 
   const shutdown = async (signal) => {

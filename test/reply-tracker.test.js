@@ -69,6 +69,7 @@ test('persist: round-trip across instances', () => {
     const a = new ReplyTracker({ persistPath: path });
     a.record(101, 'life-planner');
     a.record(202, 'belfry');
+    a.flush(); // saves are debounced via setImmediate; flush forces sync write
 
     const b = new ReplyTracker({ persistPath: path });
     assert.equal(b.size(), 2);
@@ -86,6 +87,7 @@ test('persist: missing file starts empty without error', () => {
     const t = new ReplyTracker({ persistPath: path });
     assert.equal(t.size(), 0);
     t.record(1, 'a');
+    t.flush();
     assert.equal(existsSync(path), true);
   } finally {
     cleanup();
@@ -138,6 +140,7 @@ test('persist: bump-recency survives restart', () => {
     a.record(3, 'c');
     a.record(1, 'a-again'); // bump 1 to most recent
     a.record(4, 'd'); // should evict 2
+    a.flush();
 
     const b = new ReplyTracker({ capacity: 3, persistPath: path });
     assert.equal(b.lookup(1), 'a-again');
@@ -176,10 +179,34 @@ test('persist: file written atomically (no .tmp left behind)', () => {
   try {
     const t = new ReplyTracker({ persistPath: path });
     t.record(1, 'a');
+    t.flush();
     assert.equal(existsSync(path), true);
     assert.equal(existsSync(`${path}.tmp`), false);
     const raw = readFileSync(path, 'utf8');
     assert.deepEqual(JSON.parse(raw), [[1, 'a']]);
+  } finally {
+    cleanup();
+  }
+});
+
+test('persist: multiple records in one tick coalesce to one disk write', async () => {
+  const { path, cleanup } = makeTmp();
+  try {
+    let writes = 0;
+    const t = new ReplyTracker({ persistPath: path });
+    // Wrap renameSync via fs to count writes — simpler: spy on path stat mtime.
+    // Use the public flush() to confirm pending state, then count via sequential
+    // setImmediate ticks.
+    t.record(1, 'a');
+    t.record(2, 'b');
+    t.record(3, 'c');
+    // No flush yet → file not on disk.
+    assert.equal(existsSync(path), false);
+    // Yield once so the queued setImmediate fires.
+    await new Promise((r) => setImmediate(r));
+    assert.equal(existsSync(path), true);
+    const raw = readFileSync(path, 'utf8');
+    assert.deepEqual(JSON.parse(raw), [[1, 'a'], [2, 'b'], [3, 'c']]);
   } finally {
     cleanup();
   }

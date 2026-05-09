@@ -9,7 +9,7 @@ import { loadConfig, isSubscribed, isSummarized, isDigested } from '../lib/confi
 import { StatusWatcher } from '../lib/watcher.js';
 import { Throttle } from '../lib/throttle.js';
 import { Digest } from '../lib/digest.js';
-import { compose, composeDigest } from '../lib/composer.js';
+import { compose } from '../lib/composer.js';
 import { sendMessage } from '../lib/telegram.js';
 import { ReplyTracker } from '../lib/reply-tracker.js';
 import { Registry } from '../lib/registry.js';
@@ -17,6 +17,7 @@ import { Poller } from '../lib/poller.js';
 import { maybeAutoReply } from '../lib/auto-reply.js';
 import { summarize, summarizeBatch } from '../lib/summarizer.js';
 import { makeStatusHandler } from '../lib/status-handler.js';
+import { makeDigestFlush } from '../lib/digest-flush.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -108,16 +109,18 @@ async function main() {
   const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound });
   await registry.start();
 
-  // /status [slug] command handler (#12). Reads the dashboard JSONs and
-  // sends a digest back as a quote-reply. No-AI fallback works without
-  // ANTHROPIC_API_KEY — model call only enriches the single-slug case.
-  // Pre-bind apiKey into a closure so the handler doesn't need to know about
-  // it — also reuses summarize()'s sha256 cache for repeat /status calls.
-  const summarizeFn = anthropicApiKey
+  // Two thin wrappers around the summarizer so each callsite (throttle
+  // dispatch, digest flush, /status handler) shares one "is the API key
+  // present? then summarize, else null" path. Both return null when
+  // disabled — callers fall back to the truncate / raw-text path.
+  const maybeSummarize = anthropicApiKey
     ? (args) => summarize({ ...args, apiKey: anthropicApiKey })
-    : null;
+    : async () => null;
+  const maybeSummarizeBatch = anthropicApiKey
+    ? (args) => summarizeBatch({ ...args, apiKey: anthropicApiKey })
+    : async () => null;
   const statusHandler = makeStatusHandler({
-    summarizeFn,
+    summarizeFn: anthropicApiKey ? maybeSummarize : null,
     send: ({ text, replyToMessageId }) =>
       sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
     // For single-slug /status, record the digest message_id against the
@@ -144,11 +147,10 @@ async function main() {
     throttleMs: config.throttleMs,
     dispatch: async (slug, event) => {
       let statusFile = event.statusFile;
-      if (anthropicApiKey && isSummarized(config, slug)) {
-        const summary = await summarize({
+      if (isSummarized(config, slug)) {
+        const summary = await maybeSummarize({
           prompt: statusFile?.last_prompt,
           response: statusFile?.last_response,
-          apiKey: anthropicApiKey,
         });
         if (summary) {
           statusFile = {
@@ -181,39 +183,19 @@ async function main() {
   // Optional rollup digest mode (#11). Slugs with subscriptions[slug].digest
   // bypass the per-event throttle and feed into a per-slug rollup buffer
   // that flushes after `digestIdleMs` of quiet (or `digestWindowMs` cap).
+  // Flush body lives in lib/digest-flush.js for testability.
+  const digestFlush = makeDigestFlush({
+    promptCap: config.promptCap,
+    responseCap: config.responseCap,
+    summarizeBatchFn: anthropicApiKey ? maybeSummarizeBatch : null,
+    send: ({ text }) => sendMessage({ botToken, chatId, text, forumTopicId }),
+    recordReply: (msgId, slug) => replyTracker.record(msgId, slug),
+    log,
+  });
   const digest = new Digest({
     idleMs: config.digestIdleMs,
     windowMs: config.digestWindowMs,
-    flush: async (slug, events) => {
-      const latest = events[events.length - 1];
-      const cap = (s, n) => (typeof s === 'string' && s.length > n ? s.slice(0, n - 1) + '…' : s);
-      const summary = anthropicApiKey
-        ? await summarizeBatch({
-            events: events.map((e) => ({
-              status: e.status,
-              statusLabel: e.statusFile?.statusLabel,
-              prompt: cap(e.statusFile?.last_prompt, config.promptCap),
-              response: cap(e.statusFile?.last_response, config.responseCap),
-            })),
-            apiKey: anthropicApiKey,
-          })
-        : null;
-      const text = composeDigest({
-        slug,
-        displayName: latest?.statusFile?.displayName ?? slug,
-        count: events.length,
-        summary,
-        latestStatus: latest?.status,
-        replyFooter: true,
-      });
-      try {
-        const result = await sendMessage({ botToken, chatId, text, forumTopicId });
-        if (result?.message_id) replyTracker.record(result.message_id, slug);
-        log(`sent ${slug}: digest ${events.length} events (${text.length} chars, msg ${result?.message_id})`);
-      } catch (err) {
-        log(`digest send failed for ${slug}: ${err.message}`);
-      }
-    },
+    flush: digestFlush,
   });
 
   const watcher = new StatusWatcher({
@@ -257,6 +239,7 @@ async function main() {
     await poller.stop();
     await registry.stop();
     await watcher.stop();
+    replyTracker.flush(); // sync flush of any debounced setImmediate save
     process.exit(0);
   };
   process.on('SIGINT', () => shutdown('SIGINT'));

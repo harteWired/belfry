@@ -239,3 +239,86 @@ test('tick: /status with no handler logs and drops without crashing', async () =
   assert.equal(target.delivered.length, 0);
   assert.ok(logs.some((m) => /no handler/.test(m)));
 });
+
+test('tick: /nick routes to onNickRequest', async () => {
+  const updates = [
+    {
+      update_id: 600,
+      message: { message_id: 6, chat: { id: CHAT }, text: '/nick lp life-planner' },
+    },
+  ];
+  const replyTracker = new ReplyTracker();
+  const target = fakeTarget(['life-planner']);
+  const seen = [];
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker,
+    target,
+    fetchFn: fakeOk(updates),
+    onNickRequest: async (action) => { seen.push(action); },
+  });
+  await poller.tick();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].action, 'nick-set');
+  assert.equal(seen[0].nickname, 'lp');
+  assert.equal(seen[0].slug, 'life-planner');
+});
+
+test('tick: nickname resolves on prefix path when slug unknown', async () => {
+  const updates = [
+    {
+      update_id: 700,
+      message: { message_id: 7, chat: { id: CHAT }, text: '/lp do thing' },
+    },
+  ];
+  const replyTracker = new ReplyTracker();
+  const target = fakeTarget(['life-planner']); // slug 'lp' is NOT known
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker,
+    target,
+    fetchFn: fakeOk(updates),
+    resolveNickname: (token) => (token === 'lp' ? 'life-planner' : null),
+  });
+  await poller.tick();
+  assert.deepEqual(target.delivered, [{ slug: 'life-planner', text: 'do thing' }]);
+});
+
+test('tick: unmatched goes to onUnmatched if wired', async () => {
+  const updates = [
+    {
+      update_id: 800,
+      message: { message_id: 8, chat: { id: CHAT }, text: 'hello belfry' },
+    },
+  ];
+  const replyTracker = new ReplyTracker();
+  const target = fakeTarget();
+  const seen = [];
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker,
+    target,
+    fetchFn: fakeOk(updates),
+    onUnmatched: async (req) => { seen.push(req); },
+  });
+  await poller.tick();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].text, 'hello belfry');
+});
+
+test('tick: unmatched dropped silently when onUnmatched not wired', async () => {
+  const updates = [
+    {
+      update_id: 900,
+      message: { message_id: 9, chat: { id: CHAT }, text: 'hello' },
+    },
+  ];
+  const { poller, target } = makePoller(updates);
+  await poller.tick();
+  assert.equal(target.delivered.length, 0);
+});

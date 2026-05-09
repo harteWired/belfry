@@ -18,6 +18,8 @@ import { maybeAutoReply } from '../lib/auto-reply.js';
 import { summarize, summarizeBatch } from '../lib/summarizer.js';
 import { makeStatusHandler } from '../lib/status-handler.js';
 import { makeDigestFlush } from '../lib/digest-flush.js';
+import { NicknameRegistry } from '../lib/nicknames.js';
+import { makeNickHandler } from '../lib/nick-handler.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -109,6 +111,19 @@ async function main() {
   const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound });
   await registry.start();
 
+  // Watcher is created later but we need its getActiveSlugs accessor to
+  // validate `/nick`. Forward-declare the holder; nicknames closes over it
+  // and reads through whichever watcher is wired in by the time set() runs.
+  let watcherRef = null;
+  const nicknames = new NicknameRegistry({
+    persistPath: join(stateDir, 'nicknames.json'),
+    getActiveSlugs: () => (watcherRef ? watcherRef.getActiveSlugs() : new Set()),
+    log,
+  });
+  nicknames.load();
+  if (config.nicknames) nicknames.bootstrap(config.nicknames);
+  log(`nicknames loaded: ${Object.keys(nicknames.list()).length} entr${Object.keys(nicknames.list()).length === 1 ? 'y' : 'ies'}`);
+
   // Rate-limited summarizer failure logger. Without this, repeated 401s on
   // a bad key spam stderr once per ping. We log each category at most once
   // per minute — enough to tell "key is invalid" from "Anthropic 5xx" from
@@ -144,12 +159,21 @@ async function main() {
     log,
   });
 
+  const nickHandler = makeNickHandler({
+    nicknames,
+    send: ({ text, replyToMessageId }) =>
+      sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
+    log,
+  });
+
   const poller = new Poller({
     botToken,
     expectedChatId: Number(chatId),
     replyTracker,
     target: registry,
     onStatusRequest: statusHandler,
+    onNickRequest: nickHandler,
+    resolveNickname: (token) => nicknames.resolve(token),
     log,
   });
   poller.start();
@@ -244,6 +268,7 @@ async function main() {
     log,
   });
   watcher.start();
+  watcherRef = watcher;
   log('belfry up');
 
   const shutdown = async (signal) => {

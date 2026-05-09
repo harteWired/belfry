@@ -5,13 +5,19 @@ import { ReplyTracker } from '../lib/reply-tracker.js';
 
 const CHAT = 12345;
 
-function ctx({ tracked = [], knownSlugs = ['life-planner', 'belfry'] } = {}) {
+function ctx({
+  tracked = [],
+  knownSlugs = ['life-planner', 'belfry'],
+  nicknames = {},
+} = {}) {
   const replyTracker = new ReplyTracker();
   for (const [id, slug] of tracked) replyTracker.record(id, slug);
+  const slugSet = new Set(knownSlugs);
   return {
     expectedChatId: CHAT,
     replyTracker,
-    knownSlugs: new Set(knownSlugs),
+    hasSlug: (s) => slugSet.has(s),
+    resolveNickname: (token) => nicknames[token?.toLowerCase()] ?? null,
   };
 }
 
@@ -54,9 +60,9 @@ test('quote-reply with untracked id falls through to prefix path', () => {
   assert.deepEqual(r, { action: 'deliver', slug: 'belfry', text: 'restart', messageId: 99 });
 });
 
-test('quote-reply with untracked id and no prefix → null', () => {
+test('quote-reply with untracked id and no prefix → unmatched', () => {
   const r = route({ update: update({ text: 'just a reply', replyToId: 999 }), ...ctx() });
-  assert.equal(r, null);
+  assert.deepEqual(r, { action: 'unmatched', text: 'just a reply', messageId: 99 });
 });
 
 test('prefix path with known slug routes', () => {
@@ -64,14 +70,14 @@ test('prefix path with known slug routes', () => {
   assert.deepEqual(r, { action: 'deliver', slug: 'life-planner', text: 'do X', messageId: 99 });
 });
 
-test('prefix path with unknown slug → null', () => {
+test('prefix path with unknown slug → unmatched', () => {
   const r = route({ update: update({ text: '/unknown-slug do X' }), ...ctx() });
-  assert.equal(r, null);
+  assert.deepEqual(r, { action: 'unmatched', text: '/unknown-slug do X', messageId: 99 });
 });
 
-test('prefix path with no body → null (empty message)', () => {
+test('prefix path with no body → unmatched (empty message)', () => {
   const r = route({ update: update({ text: '/life-planner' }), ...ctx() });
-  assert.equal(r, null);
+  assert.deepEqual(r, { action: 'unmatched', text: '/life-planner', messageId: 99 });
 });
 
 test('quote-reply takes precedence over prefix when both present', () => {
@@ -83,9 +89,9 @@ test('quote-reply takes precedence over prefix when both present', () => {
   assert.equal(r.text, '/belfry doing belfry stuff', 'full text preserved on quote-reply');
 });
 
-test('plain text with no reply and no prefix → null', () => {
+test('plain text with no reply and no prefix → unmatched', () => {
   const r = route({ update: update({ text: 'just chatting' }), ...ctx() });
-  assert.equal(r, null);
+  assert.deepEqual(r, { action: 'unmatched', text: 'just chatting', messageId: 99 });
 });
 
 test('/status with no slug returns action=status with slug=null', () => {
@@ -98,8 +104,21 @@ test('/status <slug> returns action=status with that slug', () => {
   assert.deepEqual(r, { action: 'status', slug: 'belfry', messageId: 99 });
 });
 
+test('/status <nickname> resolves nickname to slug', () => {
+  const r = route({
+    update: update({ text: '/status ob' }),
+    ...ctx({ nicknames: { ob: 'obsidian-vault' } }),
+  });
+  assert.deepEqual(r, { action: 'status', slug: 'obsidian-vault', messageId: 99 });
+});
+
+test('/status <unknown-token> passes raw token through', () => {
+  // Status handler will emit "no such session" — router doesn't second-guess.
+  const r = route({ update: update({ text: '/status missing' }), ...ctx() });
+  assert.deepEqual(r, { action: 'status', slug: 'missing', messageId: 99 });
+});
+
 test('/status takes precedence over slug-prefix routing', () => {
-  // Even if a slug were named "status", the reserved command wins.
   const r = route({
     update: update({ text: '/status' }),
     ...ctx({ knownSlugs: ['status'] }),
@@ -113,8 +132,65 @@ test('/status with trailing whitespace still routes', () => {
   assert.equal(r.slug, null);
 });
 
-test('/status with extra args after slug → null (rejected, not a delivery)', () => {
-  // /status takes only an optional slug — anything else is malformed.
+test('/status with extra args after slug → unmatched', () => {
   const r = route({ update: update({ text: '/status belfry now' }), ...ctx() });
-  assert.equal(r, null);
+  assert.deepEqual(r, { action: 'unmatched', text: '/status belfry now', messageId: 99 });
+});
+
+test('/nick <nick> <slug> returns nick-set', () => {
+  const r = route({ update: update({ text: '/nick ob obsidian-vault' }), ...ctx() });
+  assert.deepEqual(r, { action: 'nick-set', nickname: 'ob', slug: 'obsidian-vault', messageId: 99 });
+});
+
+test('/unnick <nick> returns nick-unset', () => {
+  const r = route({ update: update({ text: '/unnick ob' }), ...ctx() });
+  assert.deepEqual(r, { action: 'nick-unset', nickname: 'ob', messageId: 99 });
+});
+
+test('/nicks returns nick-list', () => {
+  const r = route({ update: update({ text: '/nicks' }), ...ctx() });
+  assert.deepEqual(r, { action: 'nick-list', messageId: 99 });
+});
+
+test('/nick with malformed args → unmatched', () => {
+  // Missing slug
+  const r = route({ update: update({ text: '/nick ob' }), ...ctx() });
+  assert.equal(r.action, 'unmatched');
+});
+
+test('prefix path resolves nickname when token is not a slug', () => {
+  const r = route({
+    update: update({ text: '/ob do something' }),
+    ...ctx({ nicknames: { ob: 'obsidian-vault' } }),
+  });
+  assert.deepEqual(r, { action: 'deliver', slug: 'obsidian-vault', text: 'do something', messageId: 99 });
+});
+
+test('prefix path: slug wins over nickname on collision', () => {
+  // 'foo' is both an active slug and a nickname pointing elsewhere.
+  // Slug must always win.
+  const r = route({
+    update: update({ text: '/foo body' }),
+    ...ctx({ knownSlugs: ['foo'], nicknames: { foo: 'somewhere-else' } }),
+  });
+  assert.deepEqual(r, { action: 'deliver', slug: 'foo', text: 'body', messageId: 99 });
+});
+
+test('prefix path: unknown token (neither slug nor nickname) → unmatched', () => {
+  const r = route({
+    update: update({ text: '/totally-unknown body' }),
+    ...ctx({ nicknames: { ob: 'obsidian-vault' } }),
+  });
+  assert.deepEqual(r, { action: 'unmatched', text: '/totally-unknown body', messageId: 99 });
+});
+
+test('backwards compat: knownSlugs Set still works without hasSlug', () => {
+  const replyTracker = new ReplyTracker();
+  const r = route({
+    update: update({ text: '/belfry x' }),
+    expectedChatId: CHAT,
+    replyTracker,
+    knownSlugs: new Set(['belfry']),
+  });
+  assert.deepEqual(r, { action: 'deliver', slug: 'belfry', text: 'x', messageId: 99 });
 });

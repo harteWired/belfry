@@ -116,8 +116,12 @@ test('plugin emits notifications/claude/channel when daemon delivers', async () 
 
   const notif = await p.waitFor((m) => m.method === 'notifications/claude/channel', 3000);
   assert.equal(notif.params.content, 'hello from daemon');
-  assert.equal(notif.params.meta.source, 'belfry');
+  // meta.source dropped — the harness already provides `source=` on the
+  // wrapper tag, so duplicating it here yielded the doubled-attribute
+  // <channel source="belfry" source="belfry" ...> framing the user flagged.
+  assert.equal(notif.params.meta.source, undefined);
   assert.equal(notif.params.meta.slug, 'r2');
+  assert.equal(typeof notif.params.meta.ts, 'string');
   await p.stop();
 });
 
@@ -199,9 +203,25 @@ test('reply tool POSTs to daemon /send and reports the message_id', async () => 
   assert.ok(resp.result, `expected result, got ${JSON.stringify(resp)}`);
   assert.equal(resp.result.content[0].type, 'text');
   assert.match(resp.result.content[0].text, /7777/);
+  // Tool result echoes the sent text so the model can verify (and the user
+  // has a verbatim copy in the terminal even when Telegram-side render
+  // attenuates).
+  assert.match(resp.result.content[0].text, /Sent text:[\s\S]*hello human/);
   assert.equal(calls.length, 1);
   assert.equal(calls[0].slug, 'reply-test');
   assert.equal(calls[0].text, 'hello human');
+
+  // A reply over Telegram's 4096-char cap gets locally truncated with a
+  // suffix; tool result reports the original length so the model knows.
+  const huge = 'X'.repeat(5000);
+  send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'reply', arguments: { text: huge } } });
+  const resp2 = await waitFor((m) => m.id === 3);
+  assert.match(resp2.result.content[0].text, /truncated from 5000/);
+  assert.match(resp2.result.content[0].text, /truncated by belfry/);
+  // Only one /send call was made (we don't chunk).
+  assert.equal(calls.length, 2);
+  assert.ok(calls[1].text.length <= 4096);
+  assert.match(calls[1].text, /truncated by belfry/);
 
   child.stdin.end();
   await new Promise((resolve) => {

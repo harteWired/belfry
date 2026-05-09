@@ -158,6 +158,13 @@ function handleMessage(msg) {
   }
 }
 
+// Telegram's hard cap on message text. Longer payloads are rejected outright
+// by the Bot API. We truncate locally rather than chunk into multiple sends —
+// chunking would produce N notification buzzes on the user's phone for one
+// logical reply, which is louder than the truncation suffix.
+const TELEGRAM_TEXT_CAP = 4096;
+const TRUNCATION_SUFFIX = '\n…[truncated by belfry; see terminal for full text]';
+
 async function handleToolCall(msg) {
   const name = msg.params?.name;
   const args = msg.params?.arguments ?? {};
@@ -170,10 +177,16 @@ async function handleToolCall(msg) {
     respondError(msg.id, -32602, 'reply: text must be a non-empty string');
     return;
   }
+  let toSend = text;
+  let truncatedFrom = null;
+  if (text.length > TELEGRAM_TEXT_CAP) {
+    truncatedFrom = text.length;
+    toSend = text.slice(0, TELEGRAM_TEXT_CAP - TRUNCATION_SUFFIX.length) + TRUNCATION_SUFFIX;
+  }
   const res = await fetch(`${DAEMON_BASE}/send`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ instance_id: instanceId, text }),
+    body: JSON.stringify({ instance_id: instanceId, text: toSend }),
   });
   if (!res.ok) {
     const errBody = await res.text().catch(() => '');
@@ -181,13 +194,18 @@ async function handleToolCall(msg) {
     return;
   }
   const body = await res.json().catch(() => ({}));
+  // Tool result echoes what was actually sent so the model can verify and the
+  // user can scroll back through verbatim copy in the terminal even when
+  // Telegram's render attenuates the message.
+  const sentLen = toSend.length;
+  const summary = body?.message_id
+    ? `Sent to Telegram (message ${body.message_id}, ${sentLen} chars${truncatedFrom ? `, truncated from ${truncatedFrom}` : ''}).`
+    : `Sent to Telegram (${sentLen} chars${truncatedFrom ? `, truncated from ${truncatedFrom}` : ''}).`;
   respond(msg.id, {
     content: [
       {
         type: 'text',
-        text: body?.message_id
-          ? `Sent to Telegram (message ${body.message_id}).`
-          : 'Sent to Telegram.',
+        text: `${summary}\n\nSent text:\n${toSend}`,
       },
     ],
   });
@@ -296,15 +314,17 @@ async function recvLoop() {
 }
 
 function injectChannelMessage(text) {
-  // Mirrors the params shape plugin:telegram emits. The `meta` block tells
-  // Claude where this came from so it can mention "via belfry" if asked.
+  // Channel-notification params. The harness wraps the content in a
+  // <channel ...> tag that gets the meta keys flattened to attributes —
+  // anything in `meta` shows up next to the harness-supplied `source=`,
+  // so don't duplicate `source` here. Slug + ts give the model enough
+  // routing context without bloating the framing.
   send({
     jsonrpc: '2.0',
     method: 'notifications/claude/channel',
     params: {
       content: text,
       meta: {
-        source: 'belfry',
         slug,
         ts: new Date().toISOString(),
       },

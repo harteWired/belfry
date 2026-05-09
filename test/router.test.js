@@ -184,6 +184,34 @@ test('prefix path: unknown token (neither slug nor nickname) → unmatched', () 
   assert.deepEqual(r, { action: 'unmatched', text: '/totally-unknown body', messageId: 99 });
 });
 
+test('/resume routes to action=resume with no slug or uuid', () => {
+  const r = route({ update: update({ text: '/resume' }), ...ctx() });
+  assert.deepEqual(r, { action: 'resume', slug: null, uuid: null, messageId: 99 });
+});
+
+test('/resume <slug> sets slug only', () => {
+  const r = route({ update: update({ text: '/resume belfry' }), ...ctx() });
+  assert.deepEqual(r, { action: 'resume', slug: 'belfry', uuid: null, messageId: 99 });
+});
+
+test('/resume <slug> <uuid-prefix> sets both', () => {
+  const r = route({ update: update({ text: '/resume belfry abc12345' }), ...ctx() });
+  assert.deepEqual(r, { action: 'resume', slug: 'belfry', uuid: 'abc12345', messageId: 99 });
+});
+
+test('resume accepts no-slash form: "resume" / "resume belfry"', () => {
+  const r1 = route({ update: update({ text: 'resume' }), ...ctx() });
+  assert.equal(r1.action, 'resume');
+  const r2 = route({ update: update({ text: 'resume belfry' }), ...ctx() });
+  assert.equal(r2.action, 'resume');
+  assert.equal(r2.slug, 'belfry');
+});
+
+test('resume rejects invalid uuid shape (non-hex)', () => {
+  const r = route({ update: update({ text: '/resume belfry not-a-uuid' }), ...ctx() });
+  assert.notEqual(r.action, 'resume');
+});
+
 test('forum topic: message in a topic mapped to a slug routes to that slug', () => {
   const u = {
     message: {

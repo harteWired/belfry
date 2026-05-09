@@ -28,6 +28,7 @@ import { ApprovalTokens } from '../lib/approval-tokens.js';
 import { makeApprovalHandler } from '../lib/approval-handler.js';
 import { approvalKeyboard } from '../lib/telegram.js';
 import { transcribe } from '../lib/transcribe.js';
+import { makeResumeHandler } from '../lib/resume-handler.js';
 import { getHelpText } from '../lib/help-text.js';
 
 function log(msg) {
@@ -214,6 +215,17 @@ async function main() {
     log,
   });
 
+  // /resume — lists recent sessions per slug; for /resume <slug> <uuid>,
+  // emits a copyable launch command (or executes BELFRY_RESUME_LAUNCHER
+  // if configured — opt-in, lets users wire tmux automation themselves).
+  const resumeHandler = makeResumeHandler({
+    send: ({ text, replyToMessageId }) =>
+      sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
+    resolveNickname: (token) => nicknames.resolve(token),
+    launcherCmd: (process.env.BELFRY_RESUME_LAUNCHER ?? '').trim() || null,
+    log,
+  });
+
   // Approval tokens for inline-keyboard taps on `waiting` pings (#17).
   // The throttle dispatch issues a token per waiting message; tap callbacks
   // resolve back to (slug, messageId) and inject the chosen verb as session
@@ -279,6 +291,7 @@ async function main() {
     onNickRequest: nickHandler,
     onHelpRequest: helpHandler,
     onApproval: approvalHandler,
+    onResumeRequest: resumeHandler,
     onUnmatched: agentHandler,
     resolveNickname: (token) => nicknames.resolve(token),
     resolveTopic: (id) => topicMap.get(id) ?? null,

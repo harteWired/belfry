@@ -291,32 +291,27 @@ async function main() {
         responseCap: config.responseCap,
         replyFooter: true,
       });
+      // For `waiting` events (Claude Code blocked on a permission prompt
+      // or notification), include an inline keyboard with Allow/Deny/
+      // Always/Defer. Issue the token now so the keyboard's callback_data
+      // can carry it; patch in the assigned message_id after send returns.
+      // Revoke on send failure to avoid leaking the entry until TTL.
+      let replyMarkup;
+      let tokenForThis = null;
+      if (event.status === 'waiting') {
+        tokenForThis = approvalTokens.issue(slug, null, text);
+        replyMarkup = approvalKeyboard(tokenForThis);
+      }
       try {
-        // For `waiting` events (Claude Code blocked on a permission prompt
-        // or notification), include an inline keyboard with Allow/Deny/
-        // Always/Defer. We issue a token now, send the message with the
-        // keyboard pointing at the token, then patch the token entry with
-        // the assigned message_id once Telegram returns it. The token has
-        // the slug + (eventually) the message_id so the callback handler
-        // can deliver the answer + edit the right message.
-        let replyMarkup;
-        let tokenForThis = null;
-        if (event.status === 'waiting') {
-          tokenForThis = approvalTokens.issue(slug, null, text);
-          replyMarkup = approvalKeyboard(tokenForThis);
-        }
         const result = await sendMessage({ botToken, chatId, text, forumTopicId, replyMarkup });
         if (result?.message_id) {
           replyTracker.record(result.message_id, slug);
-          // Patch the token entry's messageId now that we have it.
-          if (tokenForThis) {
-            const entry = approvalTokens.entries.get(tokenForThis);
-            if (entry) entry.messageId = result.message_id;
-          }
+          if (tokenForThis) approvalTokens.setMessageId(tokenForThis, result.message_id);
         }
         recentMessages.push(slug, { kind: 'event', text });
         log(`sent ${slug}: ${event.status} (${text.length} chars, msg ${result?.message_id}${tokenForThis ? `, +approval-buttons` : ''})`);
       } catch (err) {
+        if (tokenForThis) approvalTokens.revoke(tokenForThis);
         log(`send failed for ${slug}: ${err.message}`);
       }
     },

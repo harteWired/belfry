@@ -108,7 +108,7 @@ test('Stale token: alerts user, no delivery, no edit', async () => {
   assert.equal(fetchImpl.calls[0].body.show_alert, true);
 });
 
-test('Unknown verb: logs and returns without side effects', async () => {
+test('Unknown verb: answers callback so spinner stops, no delivery', async () => {
   const tokens = new ApprovalTokens();
   const reg = fakeRegistry();
   const fetchImpl = fakeFetch();
@@ -120,6 +120,9 @@ test('Unknown verb: logs and returns without side effects', async () => {
   });
   await h({ callbackQueryId: 'cb', verb: 'mystery', token: tok, messageId: 1 });
   assert.equal(reg.delivered.length, 0);
-  assert.equal(fetchImpl.calls.length, 0);
+  // Just answerCallbackQuery — no edit (token is consumed; nothing to draw).
+  assert.equal(fetchImpl.calls.length, 1);
+  assert.match(fetchImpl.calls[0].url, /answerCallbackQuery/);
+  assert.equal(fetchImpl.calls[0].body.show_alert, true);
   assert.ok(logs.some((m) => /unknown verb/.test(m)));
 });

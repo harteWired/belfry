@@ -371,7 +371,7 @@ test('tick: callback_query routes to onApproval when prefix matches and chat is 
         id: 'q1',
         from: { id: CHAT },
         message: { message_id: 50, chat: { id: CHAT } },
-        data: 'belfry:allow:tok123',
+        data: 'belfry:allow:0123456789abcdef',
       },
     },
   ];
@@ -391,7 +391,7 @@ test('tick: callback_query routes to onApproval when prefix matches and chat is 
   assert.equal(seen.length, 1);
   assert.equal(seen[0].callbackQueryId, 'q1');
   assert.equal(seen[0].verb, 'allow');
-  assert.equal(seen[0].token, 'tok123');
+  assert.equal(seen[0].token, '0123456789abcdef');
   assert.equal(seen[0].messageId, 50);
 });
 
@@ -404,6 +404,34 @@ test('tick: callback_query from wrong chat is dropped', async () => {
         from: { id: 99999 },
         message: { message_id: 50, chat: { id: 99999 } },
         data: 'belfry:allow:tok',
+      },
+    },
+  ];
+  const replyTracker = new ReplyTracker();
+  const target = fakeTarget();
+  const seen = [];
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker,
+    target,
+    fetchFn: fakeOk(updates),
+    onApproval: async (a) => { seen.push(a); },
+  });
+  await poller.tick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(seen.length, 0);
+});
+
+test('tick: callback_query with malformed token shape is dropped (defense in depth)', async () => {
+  const updates = [
+    {
+      update_id: 1450,
+      callback_query: {
+        id: 'q4',
+        from: { id: CHAT },
+        message: { message_id: 50, chat: { id: CHAT } },
+        data: 'belfry:allow:not-hex-or-too-short',
       },
     },
   ];

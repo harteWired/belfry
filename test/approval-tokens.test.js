@@ -47,3 +47,28 @@ test('gc: drops expired entries', () => {
   a.gc();
   assert.equal(a.size(), 1);
 });
+
+test('setMessageId: patches existing entry', () => {
+  const a = new ApprovalTokens();
+  const tok = a.issue('belfry', null, 'body');
+  assert.equal(a.setMessageId(tok, 12345), true);
+  const entry = a.consume(tok);
+  assert.equal(entry.messageId, 12345);
+});
+
+test('setMessageId: returns false on unknown / expired token', () => {
+  let now = 0;
+  const a = new ApprovalTokens({ ttlMs: 1000, now: () => now });
+  assert.equal(a.setMessageId('nonexistent', 1), false);
+  const tok = a.issue('s', null, '');
+  now = 5000;
+  assert.equal(a.setMessageId(tok, 99), false);
+});
+
+test('revoke: drops entry without consuming outcome', () => {
+  const a = new ApprovalTokens();
+  const tok = a.issue('s', null, '');
+  a.revoke(tok);
+  assert.equal(a.size(), 0);
+  assert.equal(a.consume(tok), null);
+});

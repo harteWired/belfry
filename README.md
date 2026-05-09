@@ -25,7 +25,7 @@ The leading slash is optional on every command — `status` works the same as `/
 | Command | What it does |
 |---|---|
 | `status` | List every active session, one line each |
-| `status <slug>` | Recent activity for one session, Haiku-summarized if `ANTHROPIC_API_KEY` is set |
+| `status <slug>` | Recent activity for one session, Haiku-summarized via the brain (subscription auth) when running |
 | `nick <name> <slug>` | Alias a slug to a short name. Names: `[a-z0-9][a-z0-9-]{0,31}` |
 | `unnick <name>` | Remove an alias |
 | `nicks` | List all aliases |
@@ -58,16 +58,21 @@ Per-slug `topic` (numeric forum-topic ID) on a subscription binds inbound messag
 }
 ```
 
-## Conversational layer
+## Conversational layer (the brain)
 
-Anything that isn't a command, slug-prefix, or quote-reply goes to a Haiku-backed classifier (requires `ANTHROPIC_API_KEY`). It picks one of four intents:
+Anything that isn't a command, slug-prefix, or quote-reply goes to belfry's "brain" — a long-running `claude --print` subprocess the daemon supervises at startup. The brain runs Haiku, uses your Pro/Max subscription auth (the OAuth token at `~/.claude/.credentials.json`), and has MCP tools for reading dashboard state and sending replies.
 
-- **ask** — answers questions about belfry, sessions, and state. *"what's life-planner been up to?"* / *"how do nicknames work?"* / *"show me everything that errored today"*.
-- **route** — forwards a message to a specific session. *"ask the api session to retry the deploy"* / *"obsidian start indexing the inbox"*.
-- **ambiguous** — when several slugs plausibly match, lists candidates and asks you to pick. Reply with the slug name or quote-reply.
-- **decline** — politely punts on genuinely off-topic requests (weather, general LLM chat).
+When asked, the brain:
+- **Answers questions** about belfry, sessions, and state. *"what's life-planner been up to?"* / *"how do nicknames work?"* / *"show me everything that errored today"*.
+- **Routes messages** to a specific session. *"ask the api session to retry the deploy"* / *"obsidian start indexing the inbox"*.
+- **Asks for clarification** when several slugs plausibly match.
+- **Politely declines** genuinely off-topic requests.
 
-The agent has a short conversation memory (last few turns, ~10 minutes idle window) so follow-ups like *"and what about the other one?"* have context. Without `ANTHROPIC_API_KEY`, this layer falls back to a polite "try /help" reply.
+The brain shares one process across all turns, so it accumulates conversation context naturally. The daemon also uses it for outbound summarization — per-event lock-screen pings and digest-mode rollups all flow through the same subprocess.
+
+When the brain is down (subprocess crash, claude binary not on PATH, OOM), belfry replies *"language layer is down — deterministic routes (/status, /nick, /help, /resume, quote-reply, /<slug> body) still work."* The daemon respawns the brain with exponential backoff (1s → 2s → 4s … capped at 30s).
+
+A brain isn't required to use belfry. The deterministic routes work without it; you only lose conversational classify, summarize, and the brain-mediated `/status <slug>` digest. **Public-app users without a Claude.ai subscription** can still run belfry — the brain just won't start (no claude on PATH or no OAuth credentials), and language-layer routes get the down-fallback reply.
 
 ## Why belfry exists
 
@@ -96,8 +101,10 @@ belfry is the inverse: outbound-only at first, then bidirectional, multi-termina
 | `BELFRY_CHAT_ID` | yes | Numeric chat ID where messages should land |
 | `BELFRY_FORUM_TOPIC_ID` | no | Default forum topic ID for slugs without per-slug `topic` overrides. Per-slug `topic` in `belfry.jsonc` takes precedence. |
 | `BELFRY_MCP_PORT` | no | Local registry HTTP port (default `49876`, IANA dynamic range — avoids collision with fusion360-mcp and other tools that hardcode `9876`). Bound to loopback only. The per-session MCP plugin uses `BELFRY_MCP_BASE` (default `http://127.0.0.1:49876`) to find the daemon. |
-| `ANTHROPIC_API_KEY` | no | Enables the Haiku summarizer (per-message + digest), the conversational agent, and the agent's tool catalog. Without it those features fail open to truncate / decline. |
 | `BELFRY_RESUME_LAUNCHER` | no | Optional command/script. When set, `/resume <slug> <uuid>` execs it as a detached subprocess with `BELFRY_RESUME_CMD` / `BELFRY_RESUME_CWD` / `BELFRY_RESUME_UUID` / `BELFRY_RESUME_SLUG` in env. Without it, `/resume` emits a copyable `cd <cwd> && claude --resume <uuid>` command for you to paste. |
+| `BELFRY_STATE_DIR` | no | Override the state directory (default `$XDG_STATE_HOME/belfry` or `~/.local/state/belfry`). The brain workdir, registry token, nicknames file, and reply tracker all live under it. |
+
+**No `ANTHROPIC_API_KEY` is needed.** The brain uses your Claude Code subscription via OAuth (the same credentials at `~/.claude/.credentials.json` that your interactive `claude` sessions use). For public-app users without a subscription: belfry runs without the brain — deterministic routes work, language routes return "language layer is down".
 
 ## Architecture (one diagram)
 
@@ -130,7 +137,8 @@ flowchart TD
 belfry/
 ├── bin/                       # entry points
 │   ├── belfry.js              # the daemon
-│   ├── belfry-mcp.js          # per-session MCP plugin
+│   ├── belfry-mcp.js          # per-session MCP plugin (inbound channel injection)
+│   ├── belfry-brain-mcp.js    # MCP plugin the brain subprocess loads
 │   ├── belfry-hook.js         # Stop-hook that writes /tmp/claude-dashboard/<slug>.json
 │   └── belfry-install-hook.js # idempotent installer for the hook
 ├── lib/                       # daemon internals
@@ -139,8 +147,10 @@ belfry/
 │   ├── poller.js              # Telegram getUpdates loop
 │   ├── router.js              # inbound dispatch (chat-ID gate, slug routing)
 │   ├── registry.js            # loopback HTTP registry + bearer-token auth
-│   ├── summarizer.js          # optional Haiku summarizer (opt-in per slug)
-│   └── …                      # throttle, digest, nicknames, reply tracker
+│   ├── brain.js               # subprocess supervisor for the daemon's Haiku brain
+│   ├── brain-handlers.js      # /brain/* endpoint handlers the brain calls into
+│   ├── brain-summarize.js     # brain-backed summarize / digest (replaces summarizer.js)
+│   └── …                      # throttle, digest, nicknames, reply tracker, agent-handler
 ├── docs/
 │   ├── CONVENTION.md          # /tmp/claude-dashboard/ contract
 │   ├── install-mcp.md         # per-project MCP plugin install
@@ -161,7 +171,7 @@ What this implies:
 3. **One chat, one user.** Inbound messages from any chat ID other than `BELFRY_CHAT_ID` are silently dropped (`lib/router.js`). Don't add the bot to a group whose chat ID could collide; don't expand the allowlist without thinking through who that gives shell-equivalent access to.
 4. **The registry is loopback-only.** The daemon binds `127.0.0.1:49876` and gates `/register`, `/recv`, `/send`, `/unregister` on a 32-byte bearer token at `~/.local/state/belfry/registry.token` (mode 0600). Other UIDs on the same machine cannot register a fake slug or call `/send` to abuse your bot. Don't change this binding to `0.0.0.0` — the trust model assumes loopback.
 5. **`/tmp/claude-dashboard/` should be 0700 with files 0600.** belfry-hook and belfry's watcher both write at these perms. If you have an older directory created by an earlier `claudelike-bar` or `belfry-hook` at 0755, prompt and response text in `last_response` is readable by other UIDs on the host. The daemon warns at startup if it finds a wider mode; `chmod 700 /tmp/claude-dashboard` to tighten.
-6. **`ANTHROPIC_API_KEY`, if set, leaves the host.** The summarizer (`lib/summarizer.js`) sends prompts and responses to `https://api.anthropic.com/v1/messages` so they can be Haiku-summarized into the lock-screen ping. The endpoint is hardcoded — there is no env override and no redirect path — but the data does leave the machine. Anthropic's standard data-handling applies (zero-data-retention is on by default for API customers). Subscriptions opt-in to summarize per-slug; the no-key fallback is a hard truncate that never leaves the host.
+6. **The brain ships data to Anthropic (when running).** The brain (`lib/brain.js` supervises a `claude` subprocess) sends prompt+response pairs to Claude.ai for summarization, and free-form Telegram messages for classification. This is the same data path your interactive Claude Code sessions already use — the subscription's data-handling terms apply equally. Without the brain, summarize falls back to a hard truncate and language-layer routes return "language layer is down" — neither path leaves the host.
 
 What belfry doesn't try to defend against:
 

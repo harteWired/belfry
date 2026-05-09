@@ -117,8 +117,10 @@ Slug derivation order (see `lib/slug.js` and `docs/CONVENTION.md`): `CLAUDE_SESS
 | `BELFRY_CHAT_ID` | yes | Numeric chat ID where messages should land |
 | `BELFRY_FORUM_TOPIC_ID` | no | Default forum topic ID; per-slug `topic` in belfry.jsonc takes precedence |
 | `BELFRY_MCP_PORT` | no | Override default MCP port (default `49876`, in the IANA dynamic range) |
-| `ANTHROPIC_API_KEY` | no | Enables Haiku summarizer + conversational agent (#13). Without it both fall open. |
 | `BELFRY_RESUME_LAUNCHER` | no | Optional script for `/resume <slug> <uuid>` to exec as a detached subprocess. Without it, `/resume` emits a copyable command. |
+| `BELFRY_STATE_DIR` | no | Override the state directory (default `$XDG_STATE_HOME/belfry` or `~/.local/state/belfry`). |
+
+The conversational agent + summarizer run inside a long-running `claude --print --input-format=stream-json` subprocess (the "brain"; see `lib/brain.js`) that uses the user's Claude.ai subscription via OAuth — no `ANTHROPIC_API_KEY` needed. Without claude on PATH or without subscription credentials, the brain simply doesn't start; deterministic routes still work and language-layer routes return "language layer is down".
 
 ## Privacy
 

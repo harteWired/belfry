@@ -51,7 +51,7 @@
        Pasted verbatim from web-design-pipeline/shells/portfolio-shell.css
        Patch the source file first, then re-paste here.
        ============================================================ */
-    /* SHELL_VERSION: 1.1.2 */
+    /* SHELL_VERSION: 1.1.1 */
 
     :root {
       --color-ink:    oklch(0.13 0.015 270);
@@ -156,7 +156,7 @@
 
     /* shell 1.1.1: no mix-blend-mode (Firefox/Windows flicker); spotlight on dedicated GPU layer */
     .grain { position: fixed; inset: 0; z-index: 9999; pointer-events: none; opacity: 0.08; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); background-repeat: repeat; background-size: 256px 256px; }
-    .cursor-spotlight { position: fixed; top: 0; left: 0; width: var(--cursor-spotlight-size); height: var(--cursor-spotlight-size); border-radius: 50%; background: radial-gradient(circle, var(--color-accent-glow) 0%, transparent 70%); pointer-events: none; z-index: var(--z-bg-effect); opacity: 0; transform: translate(-50%, -50%); transition: opacity var(--duration-entrance) var(--ease-standard); }
+    .cursor-spotlight { position: fixed; top: 0; left: 0; width: var(--cursor-spotlight-size); height: var(--cursor-spotlight-size); border-radius: 50%; background: radial-gradient(circle, var(--color-accent-glow) 0%, transparent 70%); pointer-events: none; z-index: var(--z-bg-effect); opacity: 0; transform: translate(-50%, -50%) translateZ(0); will-change: transform; transition: opacity var(--duration-entrance) var(--ease-standard); }
     body:hover .cursor-spotlight { opacity: 1; }
 
     .morphing-blobs { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
@@ -167,14 +167,9 @@
       .morphing-blobs__blob--1 { opacity: 0.22; filter: blur(70px); }
       .morphing-blobs__blob--2 { opacity: 0.18; filter: blur(80px); }
     }
-    /* shell 1.1.2: blob path morph removed; static shapes only.
-       Reason: filter:blur + per-frame `d` morph forces WebRender on Firefox to
-       re-rasterize every frame; tile boundaries don't subpixel-align with
-       adjacent card edges, producing the "transparent frame" shimmer at
-       element borders. Static blobs rasterize once and cache. */
-    .morphing-blobs__blob--0 { fill: var(--color-accent-primary); opacity: 0.2; filter: blur(50px); }
-    .morphing-blobs__blob--1 { fill: var(--color-accent-secondary); opacity: 0.15; filter: blur(60px); }
-    .morphing-blobs__blob--2 { fill: oklch(0.45 0.12 290); opacity: 0.12; filter: blur(70px); }
+    .morphing-blobs__blob--0 { fill: var(--color-accent-primary); opacity: 0.2; animation: morphing-blobs-morph-0 20s ease-in-out 0s infinite alternate; filter: blur(50px); }
+    .morphing-blobs__blob--1 { fill: var(--color-accent-secondary); opacity: 0.15; animation: morphing-blobs-morph-1 24s ease-in-out -3s infinite alternate; filter: blur(60px); }
+    .morphing-blobs__blob--2 { fill: oklch(0.45 0.12 290); opacity: 0.12; animation: morphing-blobs-morph-2 28s ease-in-out -6s infinite alternate; filter: blur(70px); }
 
     @keyframes morphing-blobs-morph-0 {
       0%   { d: path("M300,150.18 C374.45,150.86 379.44,159.9 422.13,229.49 C464.82,299.08 478.93,314.86 442.29,382.15 C405.65,449.44 375.23,459.64 300,453.78 C224.77,447.92 229.32,430.6 191.51,362.63 C153.7,294.67 141.42,290.96 173.97,227.23 C206.52,163.5 225.55,149.5 300,150.18"); }
@@ -566,7 +561,7 @@
       var spot = document.querySelector('.cursor-spotlight');
       if (!spot) return;
       var raf = null, x = 0, y = 0;
-      function paint() { spot.style.transform = 'translate(' + (x | 0) + 'px, ' + (y | 0) + 'px) translate(-50%, -50%)'; raf = null; }
+      function paint() { spot.style.transform = 'translate(' + (x | 0) + 'px, ' + (y | 0) + 'px) translate(-50%, -50%) translateZ(0)'; raf = null; }
       window.addEventListener('pointermove', function(e) { x = e.clientX; y = e.clientY; if (!raf) raf = requestAnimationFrame(paint); }, { passive: true });
     })();
 

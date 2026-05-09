@@ -27,6 +27,7 @@ import { ConversationMemory } from '../lib/conversation-memory.js';
 import { ApprovalTokens } from '../lib/approval-tokens.js';
 import { makeApprovalHandler } from '../lib/approval-handler.js';
 import { approvalKeyboard } from '../lib/telegram.js';
+import { transcribe } from '../lib/transcribe.js';
 import { getHelpText } from '../lib/help-text.js';
 
 function log(msg) {
@@ -86,6 +87,14 @@ async function main() {
     if (wantSummarize) {
       log('ANTHROPIC_API_KEY unset — summarize:true subscriptions will fall back to truncate');
     }
+  }
+
+  // Optional voice-note transcription (#19). Defaults to Groq's
+  // whisper-large-v3-turbo. Without the env, voice messages drop with a
+  // polite Telegram reply explaining how to enable.
+  const transcribeKey = (process.env.BELFRY_TRANSCRIBE_KEY ?? '').trim();
+  if (transcribeKey) {
+    log('voice transcription enabled (Groq Whisper)');
   }
 
   // Inbound: per-session belfry-mcp plugins register here. The poller routes
@@ -274,6 +283,21 @@ async function main() {
     resolveNickname: (token) => nicknames.resolve(token),
     resolveTopic: (id) => topicMap.get(id) ?? null,
     attachmentDir,
+    transcribeFn: transcribeKey
+      ? ({ audioPath }) => transcribe({ apiKey: transcribeKey, audioPath, logFailure: logSummarizerFailure })
+      : null,
+    onVoiceWithoutKey: async ({ messageId }) => {
+      try {
+        await sendMessage({
+          botToken,
+          chatId,
+          text: 'voice notes need BELFRY_TRANSCRIBE_KEY set in the daemon env (Groq, free tier works).',
+          replyToMessageId: messageId,
+        });
+      } catch (err) {
+        log(`voice no-key reply failed: ${err.message}`);
+      }
+    },
     log,
   });
   poller.start();

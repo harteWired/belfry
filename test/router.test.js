@@ -184,6 +184,76 @@ test('prefix path: unknown token (neither slug nor nickname) → unmatched', () 
   assert.deepEqual(r, { action: 'unmatched', text: '/totally-unknown body', messageId: 99 });
 });
 
+test('forum topic: message in a topic mapped to a slug routes to that slug', () => {
+  const u = {
+    message: {
+      message_id: 99,
+      chat: { id: CHAT },
+      message_thread_id: 5001,
+      text: 'just a status update',
+    },
+  };
+  const r = route({
+    update: u,
+    ...ctx(),
+    resolveTopic: (id) => (id === 5001 ? 'belfry' : null),
+  });
+  assert.deepEqual(r, { action: 'deliver', slug: 'belfry', text: 'just a status update', messageId: 99 });
+});
+
+test('forum topic: explicit /<slug> prefix inside a topic overrides topic routing', () => {
+  const u = {
+    message: {
+      message_id: 99,
+      chat: { id: CHAT },
+      message_thread_id: 5001, // bound to belfry
+      text: '/life-planner do the thing',
+    },
+  };
+  const r = route({
+    update: u,
+    ...ctx(),
+    resolveTopic: (id) => (id === 5001 ? 'belfry' : null),
+  });
+  // Explicit prefix wins — body without the /life-planner is delivered.
+  assert.deepEqual(r, { action: 'deliver', slug: 'life-planner', text: 'do the thing', messageId: 99 });
+});
+
+test('forum topic: reserved /status inside a topic still hits /status', () => {
+  const u = {
+    message: {
+      message_id: 99,
+      chat: { id: CHAT },
+      message_thread_id: 5001,
+      text: '/status',
+    },
+  };
+  const r = route({
+    update: u,
+    ...ctx(),
+    resolveTopic: (id) => (id === 5001 ? 'belfry' : null),
+  });
+  assert.equal(r.action, 'status');
+});
+
+test('forum topic: unmapped topic id falls through to existing routes', () => {
+  const u = {
+    message: {
+      message_id: 99,
+      chat: { id: CHAT },
+      message_thread_id: 9999,
+      text: 'just chatter',
+    },
+  };
+  const r = route({
+    update: u,
+    ...ctx(),
+    resolveTopic: () => null,
+  });
+  // No topic match, no quote-reply, no prefix → unmatched
+  assert.equal(r.action, 'unmatched');
+});
+
 test('caption is used as routing text when text is empty (photo with caption)', () => {
   const u = {
     message: {

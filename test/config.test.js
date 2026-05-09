@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-import { loadConfig, isSubscribed, isSummarized } from '../lib/config.js';
+import { loadConfig, isSubscribed, isSummarized, topicFor, topicSlugMap } from '../lib/config.js';
 
 function tmp(content) {
   const p = path.join(os.tmpdir(), `belfry-test-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonc`);
@@ -82,5 +82,48 @@ test('summarize defaults to false and only true when explicitly set', () => {
   assert.equal(isSummarized(cfg, 'b'), false);
   assert.equal(isSummarized(cfg, 'c'), false, 'non-boolean summarize is rejected');
   assert.equal(isSummarized(cfg, 'unknown'), false);
+  fs.unlinkSync(p);
+});
+
+test('topicFor: returns per-slug topic, null when unset', () => {
+  const cfg = {
+    subscriptions: {
+      a: { events: ['ready'], topic: 1234 },
+      b: { events: ['ready'] },
+    },
+  };
+  assert.equal(topicFor(cfg, 'a'), 1234);
+  assert.equal(topicFor(cfg, 'b'), null);
+  assert.equal(topicFor(cfg, 'unknown'), null);
+});
+
+test('topicSlugMap: inverts to topic→slug, ignoring slugs without topics', () => {
+  const cfg = {
+    subscriptions: {
+      a: { events: ['ready'], topic: 1 },
+      b: { events: ['ready'], topic: 2 },
+      c: { events: ['ready'] },
+    },
+  };
+  const m = topicSlugMap(cfg);
+  assert.equal(m.size, 2);
+  assert.equal(m.get(1), 'a');
+  assert.equal(m.get(2), 'b');
+});
+
+test('loadConfig: rejects non-positive / non-numeric topic values', () => {
+  const p = tmp(`{
+    "subscriptions": {
+      "good": { "events": ["ready"], "topic": 42 },
+      "stringTopic": { "events": ["ready"], "topic": "42" },
+      "zeroTopic": { "events": ["ready"], "topic": 0 },
+      "negTopic": { "events": ["ready"], "topic": -1 }
+    }
+  }`);
+  const cfg = loadConfig(p);
+  assert.equal(cfg.subscriptions.good.topic, 42);
+  assert.equal(cfg.subscriptions.stringTopic.topic, null);
+  assert.equal(cfg.subscriptions.zeroTopic.topic, null);
+  assert.equal(cfg.subscriptions.negTopic.topic, null);
   fs.unlinkSync(p);
 });

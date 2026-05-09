@@ -5,7 +5,7 @@ import { join, dirname } from 'node:path';
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 
-import { loadConfig, isSubscribed, isSummarized, isDigested } from '../lib/config.js';
+import { loadConfig, isSubscribed, isSummarized, isDigested, topicFor, topicSlugMap } from '../lib/config.js';
 import { StatusWatcher } from '../lib/watcher.js';
 import { Throttle } from '../lib/throttle.js';
 import { Digest } from '../lib/digest.js';
@@ -122,11 +122,19 @@ async function main() {
   // dashboard JSON is already there.
   const recentMessages = new RecentMessages();
 
+  // Resolve the topic to send a slug's outbound messages into. Per-slug
+  // subscription override → BELFRY_FORUM_TOPIC_ID env fallback → main chat.
+  const topicForSlug = (slug) => topicFor(config, slug) ?? (forumTopicId || null);
+
   // Outbound dispatcher used by both the spoke `reply` tool (via /send) and
   // the auto-reply path below. Records the new message_id in the reply
   // tracker so subsequent quote-replies on this thread route correctly.
+  // Per-slug forum topic override means the right session's topic gets the
+  // reply (when configured); otherwise the daemon-level fallback applies.
   const sendOutbound = async ({ slug, text, replyToMessageId }) => {
-    const result = await sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId });
+    const result = await sendMessage({
+      botToken, chatId, text, forumTopicId: topicForSlug(slug), replyToMessageId,
+    });
     if (result?.message_id) replyTracker.record(result.message_id, slug);
     recentMessages.push(slug, { kind: 'outbound', text });
     log(`sent ${slug}: outbound reply (${text.length} chars, msg ${result?.message_id}${replyToMessageId ? `, in reply to ${replyToMessageId}` : ''})`);
@@ -245,6 +253,14 @@ async function main() {
     log,
   });
 
+  // Forum-topic routing (#15). Per-slug topic IDs in subscriptions[slug].topic
+  // get inverted at startup so the inbound poller can resolve a Telegram
+  // message_thread_id back to the slug it belongs to in O(1).
+  const topicMap = topicSlugMap(config);
+  if (topicMap.size > 0) {
+    log(`forum topics: ${topicMap.size} slug(s) bound to topic IDs`);
+  }
+
   const poller = new Poller({
     botToken,
     expectedChatId: Number(chatId),
@@ -256,6 +272,7 @@ async function main() {
     onApproval: approvalHandler,
     onUnmatched: agentHandler,
     resolveNickname: (token) => nicknames.resolve(token),
+    resolveTopic: (id) => topicMap.get(id) ?? null,
     attachmentDir,
     log,
   });
@@ -303,7 +320,9 @@ async function main() {
         replyMarkup = approvalKeyboard(tokenForThis);
       }
       try {
-        const result = await sendMessage({ botToken, chatId, text, forumTopicId, replyMarkup });
+        const result = await sendMessage({
+          botToken, chatId, text, forumTopicId: topicForSlug(slug), replyMarkup,
+        });
         if (result?.message_id) {
           replyTracker.record(result.message_id, slug);
           if (tokenForThis) approvalTokens.setMessageId(tokenForThis, result.message_id);
@@ -325,7 +344,7 @@ async function main() {
     promptCap: config.promptCap,
     responseCap: config.responseCap,
     summarizeBatchFn: anthropicApiKey ? maybeSummarizeBatch : null,
-    send: ({ text }) => sendMessage({ botToken, chatId, text, forumTopicId }),
+    send: ({ slug, text }) => sendMessage({ botToken, chatId, text, forumTopicId: topicForSlug(slug) }),
     recordReply: (msgId, slug) => replyTracker.record(msgId, slug),
     recordRecent: (slug, entry) => recentMessages.push(slug, entry),
     log,

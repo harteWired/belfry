@@ -223,7 +223,11 @@ async function main() {
     JSON.stringify(
       {
         mcpServers: {
-          'belfry-brain': {
+          // Server name is flat-alphanumeric ("belfrybrain") so the tool
+          // names register as mcp__belfrybrain__* without claude's
+          // hyphen→underscore transform — keeps the --allowedTools list
+          // in lib/brain.js straightforward to maintain.
+          belfrybrain: {
             command: 'node',
             args: [join(dirname(fileURLToPath(import.meta.url)), 'belfry-brain-mcp.js')],
             env: {

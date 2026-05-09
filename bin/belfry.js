@@ -72,22 +72,25 @@ async function main() {
   }
   log(`telegram bot configured (chat ${chatId}${forumTopicId ? `, topic ${forumTopicId}` : ''})`);
 
-  // Optional Haiku summarizer. Per-slug opt-in via subscriptions[slug].summarize
-  // in belfry.jsonc. If the env var is unset, summarization is disabled and
-  // the composer falls back to its existing truncate path — no error.
+  // Optional Haiku summarizer + conversational agent + per-slug /status digest.
+  // Per-slug opt-in via subscriptions[slug].summarize in belfry.jsonc.
+  // Without the env, summarize/digest fall back to truncate, the agent
+  // declines with a "no API key" message, and /help still works.
+  //
+  // Always log the key status at startup so a misconfigured launcher (e.g.
+  // empty value exported from a missing secret store entry) is visible
+  // before the user hits the agent and gets a confusing decline.
   const anthropicApiKey = (process.env.ANTHROPIC_API_KEY ?? '').trim();
   if (anthropicApiKey) {
     const enabledSlugs = Object.entries(config.subscriptions)
       .filter(([, s]) => s.summarize)
       .map(([slug]) => slug);
+    log(`ANTHROPIC_API_KEY configured (${anthropicApiKey.length} chars) — agent + summarizer live`);
     if (enabledSlugs.length > 0) {
       log(`summarizer enabled for ${enabledSlugs.length} slug(s): ${enabledSlugs.join(', ')}`);
     }
   } else {
-    const wantSummarize = Object.values(config.subscriptions).some((s) => s.summarize);
-    if (wantSummarize) {
-      log('ANTHROPIC_API_KEY unset — summarize:true subscriptions will fall back to truncate');
-    }
+    log('ANTHROPIC_API_KEY unset or empty — conversational agent will decline; summarizer falls back to truncate');
   }
 
   // Optional voice-note transcription (#19). Defaults to Groq's
@@ -95,7 +98,9 @@ async function main() {
   // polite Telegram reply explaining how to enable.
   const transcribeKey = (process.env.BELFRY_TRANSCRIBE_KEY ?? '').trim();
   if (transcribeKey) {
-    log('voice transcription enabled (Groq Whisper)');
+    log(`BELFRY_TRANSCRIBE_KEY configured (${transcribeKey.length} chars) — voice transcription live (Groq Whisper)`);
+  } else {
+    log('BELFRY_TRANSCRIBE_KEY unset — voice notes will get a "set the key" reply and drop');
   }
 
   // Inbound: per-session belfry-mcp plugins register here. The poller routes

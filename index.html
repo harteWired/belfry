@@ -154,43 +154,21 @@
     .skip-link { position: fixed; top: var(--space-md); left: var(--space-md); z-index: calc(var(--z-overlay) + 100); padding: var(--space-sm) var(--space-md); background: var(--color-accent-primary); color: var(--color-bg-base); font-family: var(--font-body); font-weight: var(--font-weight-semibold); font-size: var(--text-sm); border-radius: var(--radius-sm); transform: translateY(-200%); transition: transform var(--duration-micro) var(--ease-standard); }
     .skip-link:focus { transform: translateY(0); }
 
-    .grain { position: fixed; inset: 0; z-index: 9999; pointer-events: none; opacity: var(--bg-effect-opacity); mix-blend-mode: overlay; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); background-repeat: repeat; background-size: 256px 256px; }
+    /* Grain: no blend mode (Firefox/Windows composites blend modes on the CPU; flickers under moving overlays). Lower opacity gives a similar feel without the cost. */
+    .grain { position: fixed; inset: 0; z-index: 9999; pointer-events: none; opacity: 0.08; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); background-repeat: repeat; background-size: 256px 256px; }
     .cursor-spotlight { position: fixed; top: 0; left: 0; width: var(--cursor-spotlight-size); height: var(--cursor-spotlight-size); border-radius: 50%; background: radial-gradient(circle, var(--color-accent-glow) 0%, transparent 70%); pointer-events: none; z-index: var(--z-bg-effect); opacity: 0; transform: translate(-50%, -50%); transition: opacity var(--duration-entrance) var(--ease-standard); }
     body:hover .cursor-spotlight { opacity: 1; }
 
-    .morphing-blobs { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
-    .morphing-blobs svg { width: 100%; height: 100%; }
-    @media (max-width: 768px) {
-      .morphing-blobs svg { width: 250%; height: 100%; margin-left: -75%; }
-      .morphing-blobs__blob--0 { opacity: 0.3; filter: blur(60px); }
-      .morphing-blobs__blob--1 { opacity: 0.22; filter: blur(70px); }
-      .morphing-blobs__blob--2 { opacity: 0.18; filter: blur(80px); }
-    }
-    .morphing-blobs__blob--0 { fill: var(--color-accent-primary); opacity: 0.2; animation: morphing-blobs-morph-0 20s ease-in-out 0s infinite alternate; filter: blur(50px); }
-    .morphing-blobs__blob--1 { fill: var(--color-accent-secondary); opacity: 0.15; animation: morphing-blobs-morph-1 24s ease-in-out -3s infinite alternate; filter: blur(60px); }
-    .morphing-blobs__blob--2 { fill: oklch(0.45 0.12 290); opacity: 0.12; animation: morphing-blobs-morph-2 28s ease-in-out -6s infinite alternate; filter: blur(70px); }
-
-    @keyframes morphing-blobs-morph-0 {
-      0%   { d: path("M300,150.18 C374.45,150.86 379.44,159.9 422.13,229.49 C464.82,299.08 478.93,314.86 442.29,382.15 C405.65,449.44 375.23,459.64 300,453.78 C224.77,447.92 229.32,430.6 191.51,362.63 C153.7,294.67 141.42,290.96 173.97,227.23 C206.52,163.5 225.55,149.5 300,150.18"); }
-      33%  { d: path("M300,169.06 C382.41,171.28 388.05,160.37 430.93,224.41 C473.81,288.45 482.22,317.13 442.94,382.53 C403.66,447.93 376.55,447.73 300,442.41 C223.45,437.09 230.9,432.42 187.77,364.8 C144.64,297.18 122.56,275.72 156.23,217 C189.9,158.28 217.59,166.84 300,169.06"); }
-      66%  { d: path("M300,141.85 C373.59,144.48 382.2,167.13 415.08,233.56 C447.96,299.99 444.13,300.14 409.61,363.28 C375.09,426.42 373.09,439.81 300,444.04 C226.91,448.27 205.05,443.14 165.98,377.37 C126.91,311.6 129.56,295.47 169.77,224.81 C209.98,154.15 226.41,139.23 300,141.85"); }
-      100% { d: path("M300,184.58 C367.38,180.79 380.79,169.7 423.25,228.84 C465.71,287.98 478.52,324.93 441.54,381.72 C404.57,438.51 381.26,420.27 300,418.15 C218.75,416.03 201.09,427.66 170.69,374.66 C140.29,321.66 159.87,298.51 198.66,241.49 C237.45,184.47 232.62,188.38 300,184.58"); }
-    }
-    @keyframes morphing-blobs-morph-1 {
-      0%   { d: path("M300,150.5 C399.98,151.11 419.92,133.99 464.89,204.8 C509.86,275.61 499.36,316.38 449.89,386.54 C400.42,456.7 383.58,442.33 300,438.66 C216.42,434.99 221.8,445.08 171.28,374.32 C120.76,303.56 92.99,269.93 131.61,202.78 C170.23,135.63 200.02,149.89 300,150.5"); }
-      33%  { d: path("M300,129.84 C386.38,122.07 425.18,129.08 466.4,203.93 C507.62,278.78 487.32,300.24 437.4,379.33 C387.48,458.42 377.43,470.47 300,467.57 C222.57,464.68 215.77,441 179.31,369.68 C142.85,298.36 142.27,301.79 178.48,229.84 C214.69,157.89 213.62,137.61 300,129.84"); }
-      66%  { d: path("M300,125.13 C387.08,122.12 413.92,135.7 453.82,211.19 C493.72,286.69 479.15,295.85 433,376.78 C386.85,457.71 379.16,481.33 300,480.97 C220.84,480.61 210.06,453.5 169.12,375.57 C128.18,297.65 124.28,296.35 163.54,221.22 C202.8,146.09 212.92,128.14 300,125.13"); }
-      100% { d: path("M300,112.68 C391.55,106.88 424.77,120.3 469.34,202.23 C513.91,284.16 499.36,311.21 448.56,385.77 C397.76,460.33 385.16,453.07 300,450.77 C214.84,448.48 205.44,446.88 164.69,378.12 C123.94,309.36 123.58,301.21 164.17,221.58 C204.76,141.95 208.45,118.49 300,112.68"); }
-    }
-    @keyframes morphing-blobs-morph-2 {
-      0%   { d: path("M300,87.68 C405.44,84.57 424.47,94.87 484.72,193.35 C544.97,291.83 556.24,334.33 500.82,415.94 C445.4,497.55 420.82,465.18 300,465.37 C179.18,465.56 148.12,495.06 98.09,416.57 C48.07,338.08 72.68,302.4 133.25,203.73 C193.82,105.06 194.56,90.79 300,87.68"); }
-      33%  { d: path("M300,66.97 C395.05,71.06 403.16,120.37 446.6,215.36 C490.04,310.35 488.77,310.3 444.79,383.59 C400.81,456.88 392.01,456.69 300,459.65 C207.99,462.61 189.17,470.85 138.1,393.47 C87.03,316.09 81.21,299.67 129.78,201.72 C178.35,103.77 204.95,62.88 300,66.97"); }
-      66%  { d: path("M300,93.14 C406.54,85.76 456.13,98.44 498.88,185.18 C541.63,271.92 502.16,283.21 442.5,382.27 C382.84,481.33 403.14,505.21 300,515.39 C196.86,525.58 145.58,507.9 98.7,416.22 C51.82,324.54 83.35,306.7 143.74,209.78 C204.13,112.86 193.46,100.52 300,93.14"); }
-      100% { d: path("M300,85.64 C406.49,95.34 397.64,119.44 449.5,213.69 C501.36,307.94 517.72,306.86 472.87,399.8 C428.02,492.74 395.5,528.24 300,523.49 C204.5,518.74 216.19,486.62 154.55,383.98 C92.91,281.34 50.9,270.87 94.53,181.37 C138.17,91.87 193.51,75.94 300,85.64"); }
-    }
+    /* Pre-rasterized ambient gradient. Replaces the SVG morphing-blobs.
+       Why: filter:blur(N px) on a position:fixed element forces Firefox WebRender to
+       re-rasterize blur tiles whenever any layer above (revealing card, animating
+       text, moving cursor spotlight) changes pixels at adjacent boundaries. The PNG
+       renders once and caches as a single static GPU layer. Same visual identity. */
+    .morphing-blobs { position: fixed; inset: 0; z-index: -1; pointer-events: none; background-image: url('assets/blobs-bg.png'); background-size: cover; background-position: center; background-repeat: no-repeat; }
 
     .nav { position: fixed; top: 0; left: 0; right: 0; z-index: var(--z-nav); padding: var(--space-lg) var(--grid-margin); transition: background-color var(--duration-hover) var(--ease-standard), padding var(--duration-hover) var(--ease-standard), backdrop-filter var(--duration-hover) var(--ease-standard); }
-    .nav--scrolled { padding-block: var(--space-md); background-color: oklch(0.13 0.015 270 / 0.85); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-bottom: var(--border-subtle); }
+    /* Solid bg instead of backdrop-filter: blur — Bugzilla 1718471 (Firefox WebRender) */
+    .nav--scrolled { padding-block: var(--space-md); background-color: oklch(0.13 0.015 270 / 0.95); border-bottom: var(--border-subtle); }
     .nav nav { display: flex; align-items: center; justify-content: space-between; max-width: var(--grid-max-width); margin-inline: auto; }
     .nav__logo { display: flex; align-items: center; gap: var(--space-sm); font-family: var(--font-mono); font-size: var(--text-1); font-weight: var(--font-weight-semibold); color: var(--color-accent-primary); letter-spacing: -0.02em; }
     .nav__rabbit { width: 36px; height: 36px; object-fit: contain; filter: drop-shadow(0 0 8px oklch(0.72 0.12 165 / 0.4)); }
@@ -203,7 +181,7 @@
     .nav__toggle-bar { display: block; width: 24px; height: 2px; background: var(--color-fg-base); transition: transform var(--duration-hover) var(--ease-dramatic); }
     .nav__toggle[aria-expanded="true"] .nav__toggle-bar:first-child { transform: translateY(4px) rotate(45deg); }
     .nav__toggle[aria-expanded="true"] .nav__toggle-bar:last-child { transform: translateY(-4px) rotate(-45deg); }
-    .nav-overlay { position: fixed; inset: 0; z-index: calc(var(--z-nav) - 1); display: flex; align-items: center; justify-content: center; background: oklch(0.13 0.015 270 / 0.95); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); opacity: 0; pointer-events: none; transition: opacity var(--duration-entrance) var(--ease-standard); }
+    .nav-overlay { position: fixed; inset: 0; z-index: calc(var(--z-nav) - 1); display: flex; align-items: center; justify-content: center; background: oklch(0.13 0.015 270 / 0.98); opacity: 0; pointer-events: none; transition: opacity var(--duration-entrance) var(--ease-standard); }
     .nav-overlay--open { opacity: 1; pointer-events: auto; }
     .nav-overlay__links { display: flex; flex-direction: column; align-items: center; gap: var(--space-xl); }
     .nav-overlay__link { font-family: var(--font-heading); font-size: var(--text-3); font-weight: var(--font-weight-heading); color: var(--color-fg-base); transition: color var(--duration-micro) var(--ease-standard); }
@@ -227,8 +205,12 @@
     .section--surface { background: var(--color-bg-surface); border-top: var(--border-subtle); border-bottom: var(--border-subtle); }
 
     /* .reveal — progressive enhancement: visible by default; only hidden when JS marks <html class="js"> */
-    .js .reveal { opacity: 0; transform: translateY(24px); transition: opacity var(--duration-entrance) var(--ease-entrance), transform var(--duration-entrance) var(--ease-entrance); }
+    /* will-change promotes each reveal target to its own GPU layer for its single fade-up,
+       so the motion doesn't trigger re-rasterization of nearby layers. Cleared once the
+       transition ends — see transitionend handler in JS. */
+    .js .reveal { opacity: 0; transform: translateY(24px); transition: opacity var(--duration-entrance) var(--ease-entrance), transform var(--duration-entrance) var(--ease-entrance); will-change: opacity, transform; }
     .js .reveal.is-visible { opacity: 1; transform: none; }
+    .js .reveal.is-settled { will-change: auto; }
 
     @media (prefers-reduced-motion: reduce) {
       *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
@@ -257,7 +239,8 @@
     .hero__visual { position: relative; aspect-ratio: 1; max-width: 480px; justify-self: center; width: 100%; }
     .hero__rings { position: absolute; inset: 0; width: 100%; height: 100%; }
     .hero__rabbit { position: absolute; inset: 0; margin: auto; width: 70%; height: 70%; object-fit: contain; filter: drop-shadow(0 0 60px oklch(0.78 0.14 55 / 0.18)); opacity: 0.92; }
-    .hero__bell { position: absolute; right: 6%; top: 4%; width: 24%; aspect-ratio: 1; border-radius: 50%; border: 1px solid oklch(0.78 0.14 55 / 0.4); display: grid; place-items: center; background: oklch(0.13 0.015 270 / 0.6); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-accent-primary); animation: bell-pulse 3.2s ease-in-out infinite; }
+    /* Bell: drop backdrop-filter (Firefox flicker source). Solid bg reads identically against the PNG ambient. */
+    .hero__bell { position: absolute; right: 6%; top: 4%; width: 24%; aspect-ratio: 1; border-radius: 50%; border: 1px solid oklch(0.78 0.14 55 / 0.4); display: grid; place-items: center; background: oklch(0.17 0.012 270 / 0.85); font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-accent-primary); animation: bell-pulse 3.2s ease-in-out infinite; }
     @keyframes bell-pulse {
       0%, 100% { box-shadow: 0 0 0 0 oklch(0.78 0.14 55 / 0.35); }
       50%      { box-shadow: 0 0 0 14px oklch(0.78 0.14 55 / 0); }
@@ -330,13 +313,7 @@
   <div class="grain" aria-hidden="true"></div>
   <div class="cursor-spotlight" aria-hidden="true"></div>
 
-  <div class="morphing-blobs" aria-hidden="true">
-    <svg viewBox="0 0 600 600" xmlns="http://www.w3.org/2000/svg">
-      <path class="morphing-blobs__blob--0" d="M300,150.18 C374.45,150.86 379.44,159.9 422.13,229.49 C464.82,299.08 478.93,314.86 442.29,382.15 C405.65,449.44 375.23,459.64 300,453.78 C224.77,447.92 229.32,430.6 191.51,362.63 C153.7,294.67 141.42,290.96 173.97,227.23 C206.52,163.5 225.55,149.5 300,150.18" transform="translate(-42, -79)"/>
-      <path class="morphing-blobs__blob--1" d="M300,150.5 C399.98,151.11 419.92,133.99 464.89,204.8 C509.86,275.61 499.36,316.38 449.89,386.54 C400.42,456.7 383.58,442.33 300,438.66 C216.42,434.99 221.8,445.08 171.28,374.32 C120.76,303.56 92.99,269.93 131.61,202.78 C170.23,135.63 200.02,149.89 300,150.5" transform="translate(-77, 29)"/>
-      <path class="morphing-blobs__blob--2" d="M300,87.68 C405.44,84.57 424.47,94.87 484.72,193.35 C544.97,291.83 556.24,334.33 500.82,415.94 C445.4,497.55 420.82,465.18 300,465.37 C179.18,465.56 148.12,495.06 98.09,416.57 C48.07,338.08 72.68,302.4 133.25,203.73 C193.82,105.06 194.56,90.79 300,87.68" transform="translate(11, 75)"/>
-    </svg>
-  </div>
+  <div class="morphing-blobs" aria-hidden="true"></div>
 
   <header class="nav">
     <nav aria-label="Main navigation">
@@ -573,15 +550,22 @@
       window.addEventListener('scroll', update, { passive: true });
     })();
 
-    // Reveal on scroll
+    // Reveal on scroll. Cleanup will-change on transitionend to free the GPU layer once each reveal settles.
     (function() {
       var els = document.querySelectorAll('.reveal');
       if (!els.length || !('IntersectionObserver' in window)) {
-        els.forEach(function(el) { el.classList.add('is-visible'); });
+        els.forEach(function(el) { el.classList.add('is-visible', 'is-settled'); });
         return;
       }
+      function settle(e) { if (e.propertyName === 'opacity') { this.classList.add('is-settled'); this.removeEventListener('transitionend', settle); } }
       var io = new IntersectionObserver(function(entries) {
-        entries.forEach(function(e) { if (e.isIntersecting) { e.target.classList.add('is-visible'); io.unobserve(e.target); } });
+        entries.forEach(function(e) {
+          if (e.isIntersecting) {
+            e.target.addEventListener('transitionend', settle);
+            e.target.classList.add('is-visible');
+            io.unobserve(e.target);
+          }
+        });
       }, { rootMargin: '0px 0px -10% 0px', threshold: 0.05 });
       els.forEach(function(el) { io.observe(el); });
     })();

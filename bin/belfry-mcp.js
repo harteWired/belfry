@@ -308,27 +308,34 @@ async function recvLoop() {
       continue;
     }
     if (typeof body?.text === 'string' && body.text.length > 0) {
-      injectChannelMessage(body.text);
+      injectChannelMessage(body.text, {
+        imagePath: typeof body.image_path === 'string' ? body.image_path : undefined,
+        voicePath: typeof body.voice_path === 'string' ? body.voice_path : undefined,
+      });
     }
   }
 }
 
-function injectChannelMessage(text) {
+function injectChannelMessage(text, attachment = {}) {
   // Channel-notification params. The harness wraps the content in a
   // <channel ...> tag that gets the meta keys flattened to attributes —
   // anything in `meta` shows up next to the harness-supplied `source=`,
   // so don't duplicate `source` here. Slug + ts give the model enough
   // routing context without bloating the framing.
+  //
+  // image_path / voice_path on params let the receiving harness surface the
+  // attachment to Claude as if the user had attached it at the prompt.
+  // Mirrors the bundled plugin:telegram shape.
+  const params = {
+    content: text,
+    meta: { slug, ts: new Date().toISOString() },
+  };
+  if (attachment.imagePath) params.image_path = attachment.imagePath;
+  if (attachment.voicePath) params.voice_path = attachment.voicePath;
   send({
     jsonrpc: '2.0',
     method: 'notifications/claude/channel',
-    params: {
-      content: text,
-      meta: {
-        slug,
-        ts: new Date().toISOString(),
-      },
-    },
+    params,
   });
 }
 

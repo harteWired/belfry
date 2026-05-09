@@ -59,6 +59,26 @@ test('deliver returns 0 when no instances are registered for the slug', async ()
   assert.equal(n, 0);
 });
 
+test('deliver passes attachment imagePath through /recv as image_path', async () => {
+  await post('/register', { instance_id: 'imga', slug: 'imgslug', cwd: '/x' });
+  const n = registry.deliver('imgslug', 'screenshot', null, { imagePath: '/tmp/foo.jpg' });
+  assert.equal(n, 1);
+  const r = await fetch(`${baseUrl}/recv?instance_id=imga`);
+  assert.deepEqual(await r.json(), { text: 'screenshot', image_path: '/tmp/foo.jpg' });
+  await post('/unregister', { instance_id: 'imga' });
+});
+
+test('deliver without attachment yields plain { text } recv envelope', async () => {
+  await post('/register', { instance_id: 'pa', slug: 'plainslug', cwd: '/x' });
+  registry.deliver('plainslug', 'just text');
+  const r = await fetch(`${baseUrl}/recv?instance_id=pa`);
+  const body = await r.json();
+  assert.equal(body.text, 'just text');
+  assert.equal(body.image_path, undefined);
+  assert.equal(body.voice_path, undefined);
+  await post('/unregister', { instance_id: 'pa' });
+});
+
 test('recv long-polls and returns text once deliver fires', async () => {
   await post('/register', { instance_id: 'p', slug: 'q', cwd: '/x' });
   const recvP = fetch(`${baseUrl}/recv?instance_id=p`);

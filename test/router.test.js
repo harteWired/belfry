@@ -184,6 +184,47 @@ test('prefix path: unknown token (neither slug nor nickname) → unmatched', () 
   assert.deepEqual(r, { action: 'unmatched', text: '/totally-unknown body', messageId: 99 });
 });
 
+test('caption is used as routing text when text is empty (photo with caption)', () => {
+  const u = {
+    message: {
+      message_id: 99,
+      chat: { id: CHAT },
+      photo: [{ file_id: 'abc' }],
+      caption: '/belfry restart',
+    },
+  };
+  const r = route({ update: u, ...ctx() });
+  assert.deepEqual(r, { action: 'deliver', slug: 'belfry', text: 'restart', messageId: 99 });
+});
+
+test('photo with no caption + quote-reply still routes via quote-reply', () => {
+  const u = {
+    message: {
+      message_id: 99,
+      chat: { id: CHAT },
+      photo: [{ file_id: 'abc' }],
+      reply_to_message: { message_id: 42 },
+    },
+  };
+  const r = route({ update: u, ...ctx({ tracked: [[42, 'life-planner']] }) });
+  assert.equal(r.action, 'deliver');
+  assert.equal(r.slug, 'life-planner');
+});
+
+test('photo with no caption and no quote-reply → null (drops)', () => {
+  // Routing intent must come from somewhere — caption or quote-reply. v1
+  // doesn't auto-route bare photos via the agent.
+  const u = {
+    message: {
+      message_id: 99,
+      chat: { id: CHAT },
+      photo: [{ file_id: 'abc' }],
+    },
+  };
+  const r = route({ update: u, ...ctx() });
+  assert.equal(r, null);
+});
+
 test('reserved tokens never deliver via prefix path even if a slug literally matches', () => {
   // A session named exactly the reserved token exists. Malformed reserved
   // commands that don't match the strict reserved-command regex must not

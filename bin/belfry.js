@@ -2,7 +2,7 @@
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 
 import { loadConfig, isSubscribed, isSummarized, isDigested } from '../lib/config.js';
@@ -102,6 +102,15 @@ async function main() {
   // /register an arbitrary slug and drain another session's Telegram replies.
   const tokenPath = join(stateDir, 'registry.token');
   const authToken = ensureAuthToken(tokenPath);
+
+  // Scratch directory for inbound attachments (Telegram photos / voice
+  // notes downloaded for forwarding to sessions). 0700 dir, 0600 files —
+  // payloads can be sensitive (screenshots of work) so other UIDs on the
+  // host shouldn't read them. GC on startup drops anything older than 24h
+  // since by then the receiving session has either consumed the file or
+  // moved on; the path is opaque to the daemon after delivery.
+  const attachmentDir = join(stateDir, 'attachments');
+  gcOldAttachments(attachmentDir, log);
 
   // In-memory ring of recent outbound messages per slug. Read by the
   // conversational agent's `recent_messages` tool to answer "what's been
@@ -230,6 +239,7 @@ async function main() {
     onHelpRequest: helpHandler,
     onUnmatched: agentHandler,
     resolveNickname: (token) => nicknames.resolve(token),
+    attachmentDir,
     log,
   });
   poller.start();
@@ -340,6 +350,38 @@ async function main() {
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
+}
+
+/**
+ * Drop attachment files older than 24h. Best-effort — log on failure
+ * rather than blocking startup. The receiving session has either consumed
+ * the path or moved on by then; we don't track that signal so use a wall
+ * clock cap.
+ */
+function gcOldAttachments(dir, log) {
+  const ATTACHMENT_TTL_MS = 24 * 60 * 60 * 1000;
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return; // dir doesn't exist yet or unreadable; created on first download
+  }
+  const now = Date.now();
+  let dropped = 0;
+  for (const name of names) {
+    const full = join(dir, name);
+    let stat;
+    try { stat = statSync(full); } catch { continue; }
+    if (now - stat.mtimeMs > ATTACHMENT_TTL_MS) {
+      try {
+        unlinkSync(full);
+        dropped++;
+      } catch (err) {
+        log(`gc attachments: failed to unlink ${full}: ${err.message}`);
+      }
+    }
+  }
+  if (dropped > 0) log(`gc attachments: dropped ${dropped} file(s) older than 24h`);
 }
 
 /**

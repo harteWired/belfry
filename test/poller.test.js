@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { Poller } from '../lib/poller.js';
 import { ReplyTracker } from '../lib/reply-tracker.js';
 
@@ -358,6 +361,93 @@ test('tick: bare "status" (no slash) routes to onStatusRequest', async () => {
   await new Promise((r) => setImmediate(r));
   assert.equal(seen.length, 1);
   assert.equal(seen[0].slug, null);
+});
+
+test('tick: photo with caption downloads, routes via caption, delivers with attachment', async () => {
+  // Telegram returns getFile then the file body. We stub fetch by the URL
+  // shape: getUpdates → updates payload; getFile → file path; final fetch →
+  // raw bytes.
+  const updates = [
+    {
+      update_id: 1100,
+      message: {
+        message_id: 11,
+        chat: { id: CHAT },
+        photo: [
+          { file_id: 'tiny', width: 90 },
+          { file_id: 'large', width: 1280 },
+        ],
+        caption: '/life-planner here is the screenshot',
+      },
+    },
+  ];
+  const calls = [];
+  const fetchFn = async (url, init) => {
+    calls.push({ url, method: init?.method ?? 'GET' });
+    if (url.endsWith('/getUpdates')) {
+      return { ok: true, json: async () => ({ ok: true, result: updates }) };
+    }
+    if (url.endsWith('/getFile')) {
+      return { ok: true, json: async () => ({ ok: true, result: { file_path: 'photos/file_123.jpg', file_size: 100 } }) };
+    }
+    if (url.includes('/file/bot')) {
+      return { ok: true, arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer };
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  };
+  const replyTracker = new ReplyTracker();
+  const target = {
+    delivered: [],
+    deliver(slug, text, msgId, attachment) {
+      this.delivered.push({ slug, text, msgId, attachment });
+      return 1;
+    },
+    knownSlugs() { return new Set(['life-planner']); },
+  };
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'belfry-attach-'));
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker,
+    target,
+    fetchFn,
+    attachmentDir: tmpDir,
+  });
+  await poller.tick();
+  // Allow the async process() to flush.
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(target.delivered.length, 1, `delivered: ${JSON.stringify(target.delivered)}`);
+  assert.equal(target.delivered[0].slug, 'life-planner');
+  assert.equal(target.delivered[0].text, 'here is the screenshot');
+  assert.match(target.delivered[0].attachment.imagePath, /\.jpg$/);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
+test('tick: photo with no caption + no quote-reply is dropped silently (no attachment dir consulted is fine)', async () => {
+  const updates = [
+    {
+      update_id: 1200,
+      message: {
+        message_id: 12,
+        chat: { id: CHAT },
+        photo: [{ file_id: 'tiny' }],
+      },
+    },
+  ];
+  const replyTracker = new ReplyTracker();
+  const target = fakeTarget();
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker,
+    target,
+    fetchFn: fakeOk(updates),
+    // No attachmentDir — the photo download path is disabled, the router
+    // returns null on empty text + no quote-reply.
+  });
+  await poller.tick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(target.delivered.length, 0);
 });
 
 test('tick: unmatched dropped silently when onUnmatched not wired', async () => {

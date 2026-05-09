@@ -264,6 +264,26 @@ test('forum topic: reserved /status inside a topic still hits /status', () => {
   assert.equal(r.action, 'status');
 });
 
+test('forum topic: empty-text photo into a bound topic still routes (no caption needed)', () => {
+  const u = {
+    message: {
+      message_id: 99,
+      chat: { id: CHAT },
+      message_thread_id: 5001,
+      photo: [{ file_id: 'abc' }],
+      // no caption, no text
+    },
+  };
+  const r = route({
+    update: u,
+    ...ctx(),
+    resolveTopic: (id) => (id === 5001 ? 'belfry' : null),
+  });
+  // Topic binding is the routing intent — body is empty but goes to belfry.
+  assert.equal(r.action, 'deliver');
+  assert.equal(r.slug, 'belfry');
+});
+
 test('forum topic: unmapped topic id falls through to existing routes', () => {
   const u = {
     message: {

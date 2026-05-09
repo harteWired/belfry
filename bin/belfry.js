@@ -301,10 +301,13 @@ async function main() {
       : null,
     onVoiceWithoutKey: async ({ messageId }) => {
       try {
+        // Match the rest of the file's outbound calls — pass forumTopicId
+        // so the reply lands in the configured topic on forum groups.
         await sendMessage({
           botToken,
           chatId,
           text: 'voice notes need BELFRY_TRANSCRIBE_KEY set in the daemon env (Groq, free tier works).',
+          forumTopicId,
           replyToMessageId: messageId,
         });
       } catch (err) {

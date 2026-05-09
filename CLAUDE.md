@@ -115,8 +115,11 @@ Slug derivation order (see `lib/slug.js` and `docs/CONVENTION.md`): `CLAUDE_SESS
 |---|---|---|
 | `BELFRY_TOKEN` | yes | Bot token from @BotFather |
 | `BELFRY_CHAT_ID` | yes | Numeric chat ID where messages should land |
-| `BELFRY_FORUM_TOPIC_ID` | no | Forum topic ID, if posting to a Forum group's topic |
+| `BELFRY_FORUM_TOPIC_ID` | no | Default forum topic ID; per-slug `topic` in belfry.jsonc takes precedence |
 | `BELFRY_MCP_PORT` | no | Override default MCP port (default `49876`, in the IANA dynamic range) |
+| `ANTHROPIC_API_KEY` | no | Enables Haiku summarizer + conversational agent (#13). Without it both fall open. |
+| `BELFRY_TRANSCRIBE_KEY` | no | Groq key for voice-note transcription (#19). Without it, voice messages get a polite reply + drop. |
+| `BELFRY_RESUME_LAUNCHER` | no | Optional script for `/resume <slug> <uuid>` to exec as a detached subprocess. Without it, `/resume` emits a copyable command. |
 
 ## Privacy
 

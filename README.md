@@ -30,8 +30,34 @@ The leading slash is optional on every command — `status` works the same as `/
 | `unnick <name>` | Remove an alias |
 | `nicks` | List all aliases |
 | `help [topic]` | Reference text. Topics: `routing`, `nicknames`, `status`, `agent` |
+| `resume` | List recent Claude Code sessions per slug |
+| `resume <slug>` | List recent sessions for one slug |
+| `resume <slug> <uuid>` | Get a copyable `claude --resume <uuid>` command, or auto-launch via `BELFRY_RESUME_LAUNCHER` if set |
 
-Slugs always win over nicknames on collision — a session literally named `ob` beats a nickname `ob`. Reserved names (`status`, `nick`, `unnick`, `nicks`, `help`) cannot be used as nicknames.
+Slugs always win over nicknames on collision — a session literally named `ob` beats a nickname `ob`. Reserved names (`status`, `nick`, `unnick`, `nicks`, `help`, `resume`) cannot be used as nicknames.
+
+## Inbound attachments
+
+- **Photos** — Telegram photos with a caption that routes (slug-prefix, nickname, or quote-reply) get downloaded (4 MB cap) and forwarded to the receiving session via the channel notification's `image_path` field. Bare photos with no caption and no quote-reply are dropped — caption-or-quote tells belfry where to send it.
+- **Voice notes** — when `BELFRY_TRANSCRIBE_KEY` is set (Groq's free tier covers any single-user volume), inbound voice messages get transcribed via Whisper-large-v3-turbo and routed as if you'd typed the transcript. 60-second cap. Without the key, voice messages get a polite reply explaining how to enable.
+
+Both attachment types respect the existing trust boundary — only messages from `BELFRY_CHAT_ID` ever hit the network/disk side-effect path.
+
+## Approval buttons
+
+When a session enters the `waiting` state (Claude Code blocked on a permission prompt), belfry attaches a 4-button inline keyboard to the ping: **Allow / Deny / Always / Defer**. Tap a button → the choice is forwarded into the session as if you typed it; the message updates to show the outcome and drops the keyboard. `Defer` skips delivery — the prompt stays open and you can reply via chat.
+
+## Forum-topic routing
+
+Per-slug `topic` (numeric forum-topic ID) on a subscription binds inbound messages from that topic to the slug, and outbound pings/replies for the slug to the same topic. Useful when running belfry in a Telegram Forum group and wanting one topic per project. Telegram's Bot API doesn't expose a topic-list endpoint — paste the numeric topic ID into the config once.
+
+```jsonc
+{
+  "subscriptions": {
+    "obsidian-vault": { "events": ["ready", "error"], "topic": 5001 }
+  }
+}
+```
 
 ## Conversational layer
 
@@ -69,8 +95,11 @@ belfry is the inverse: outbound-only at first, then bidirectional, multi-termina
 |---|---|---|
 | `BELFRY_TOKEN` | yes | Bot token from @BotFather |
 | `BELFRY_CHAT_ID` | yes | Numeric chat ID where messages should land |
-| `BELFRY_FORUM_TOPIC_ID` | no | Forum topic ID, if posting to a Telegram Forum group's topic rather than a plain chat |
+| `BELFRY_FORUM_TOPIC_ID` | no | Default forum topic ID for slugs without per-slug `topic` overrides. Per-slug `topic` in `belfry.jsonc` takes precedence. |
 | `BELFRY_MCP_PORT` | no | Local registry HTTP port (default `49876`, IANA dynamic range — avoids collision with fusion360-mcp and other tools that hardcode `9876`). Bound to loopback only. The per-session MCP plugin uses `BELFRY_MCP_BASE` (default `http://127.0.0.1:49876`) to find the daemon. |
+| `ANTHROPIC_API_KEY` | no | Enables the Haiku summarizer (per-message + digest), the conversational agent, and the agent's tool catalog. Without it those features fail open to truncate / decline. |
+| `BELFRY_TRANSCRIBE_KEY` | no | Enables voice-note transcription via Groq's Whisper endpoint. Without it, voice messages get a polite "set this env to enable" reply and drop. |
+| `BELFRY_RESUME_LAUNCHER` | no | Optional command/script. When set, `/resume <slug> <uuid>` execs it as a detached subprocess with `BELFRY_RESUME_CMD` / `BELFRY_RESUME_CWD` / `BELFRY_RESUME_UUID` / `BELFRY_RESUME_SLUG` in env. Without it, `/resume` emits a copyable `cd <cwd> && claude --resume <uuid>` command for you to paste. |
 
 ## Architecture (one diagram)
 

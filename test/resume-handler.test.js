@@ -48,8 +48,22 @@ test('/resume <slug> <uuid-prefix>: emits a copyable command by default', async 
   const send = fakeSender();
   const h = makeResumeHandler({ send, listRecent: () => SAMPLE_SESSIONS });
   await h({ slug: 'belfry', uuid: 'abc12345', messageId: 5 });
-  assert.match(send.calls[0].text, /cd \/workspace\/projects\/belfry/);
+  // cwd is single-quoted to survive paths with spaces / shell metacharacters.
+  assert.match(send.calls[0].text, /cd '\/workspace\/projects\/belfry'/);
   assert.match(send.calls[0].text, /claude --resume abc12345-aaaa/);
+});
+
+test('/resume: cwd containing single quotes is safely escaped', async () => {
+  const send = fakeSender();
+  const trickySessions = [
+    { slug: 'foo', cwd: "/path/with 'apostrophe'/in it", uuid: 'aaaa1111', mtimeMs: Date.now(), lastUser: '' },
+  ];
+  const h = makeResumeHandler({ send, listRecent: () => trickySessions });
+  await h({ slug: 'foo', uuid: 'aaaa1111', messageId: 5 });
+  // The escape pattern should produce a syntactically valid bash command.
+  const reply = send.calls[0].text;
+  assert.ok(reply.includes(`cd '/path/with '\\''apostrophe'\\''/in it'`),
+    `actual: ${reply}`);
 });
 
 test('/resume <slug> <ambiguous-prefix>: replies "couldn\'t resolve"', async () => {

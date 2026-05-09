@@ -109,15 +109,29 @@ async function main() {
   const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound });
   await registry.start();
 
+  // Rate-limited summarizer failure logger. Without this, repeated 401s on
+  // a bad key spam stderr once per ping. We log each category at most once
+  // per minute — enough to tell "key is invalid" from "Anthropic 5xx" from
+  // "network gone" without flooding logs in steady-state failure.
+  const summarizerLogState = new Map();
+  const SUMMARIZER_LOG_WINDOW_MS = 60_000;
+  const logSummarizerFailure = (category, detail) => {
+    const now = Date.now();
+    const last = summarizerLogState.get(category) ?? 0;
+    if (now - last < SUMMARIZER_LOG_WINDOW_MS) return;
+    summarizerLogState.set(category, now);
+    log(`summarizer ${category}${detail ? ` (${detail})` : ''}`);
+  };
+
   // Two thin wrappers around the summarizer so each callsite (throttle
   // dispatch, digest flush, /status handler) shares one "is the API key
   // present? then summarize, else null" path. Both return null when
   // disabled — callers fall back to the truncate / raw-text path.
   const maybeSummarize = anthropicApiKey
-    ? (args) => summarize({ ...args, apiKey: anthropicApiKey })
+    ? (args) => summarize({ ...args, apiKey: anthropicApiKey, logFailure: logSummarizerFailure })
     : async () => null;
   const maybeSummarizeBatch = anthropicApiKey
-    ? (args) => summarizeBatch({ ...args, apiKey: anthropicApiKey })
+    ? (args) => summarizeBatch({ ...args, apiKey: anthropicApiKey, logFailure: logSummarizerFailure })
     : async () => null;
   const statusHandler = makeStatusHandler({
     summarizeFn: anthropicApiKey ? maybeSummarize : null,

@@ -227,6 +227,99 @@ test('summarizeBatch: returns null on empty model text', async () => {
   assert.equal(out, null);
 });
 
+test('summarize: logFailure called with auth/rate_limit/upstream/parse/timeout categories', async () => {
+  const cases = [
+    { res: { ok: false, status: 401, json: async () => ({}) }, cat: 'auth' },
+    { res: { ok: false, status: 403, json: async () => ({}) }, cat: 'auth' },
+    { res: { ok: false, status: 429, json: async () => ({}) }, cat: 'rate_limit' },
+    { res: { ok: false, status: 503, json: async () => ({}) }, cat: 'upstream' },
+    { res: { ok: false, status: 400, json: async () => ({}) }, cat: 'client_error' },
+    { res: jsonResponse('not USER/CLAUDE format'), cat: 'parse' },
+  ];
+  for (const { res, cat } of cases) {
+    const seen = [];
+    await summarize({
+      prompt: `prompt-${cat}`,
+      response: `response-${cat}`,
+      apiKey: 'sk',
+      cache: makeCache(),
+      fetchImpl: fakeFetch([res]),
+      logFailure: (category) => seen.push(category),
+    });
+    assert.deepEqual(seen, [cat], `expected ${cat}`);
+  }
+});
+
+test('summarize: logFailure timeout category on AbortError throw', async () => {
+  const seen = [];
+  await summarize({
+    prompt: 'p',
+    response: 'r',
+    apiKey: 'sk',
+    cache: makeCache(),
+    fetchImpl: fakeFetch([
+      () => {
+        const e = new Error('aborted');
+        e.name = 'AbortError';
+        throw e;
+      },
+    ]),
+    logFailure: (category) => seen.push(category),
+  });
+  assert.deepEqual(seen, ['timeout']);
+});
+
+test('summarize: logFailure network category on plain throw', async () => {
+  const seen = [];
+  await summarize({
+    prompt: 'p',
+    response: 'r',
+    apiKey: 'sk',
+    cache: makeCache(),
+    fetchImpl: fakeFetch([() => { throw new Error('ECONNRESET'); }]),
+    logFailure: (category) => seen.push(category),
+  });
+  assert.deepEqual(seen, ['network']);
+});
+
+test('summarize: logFailure not called on success or missing-key paths', async () => {
+  const seen = [];
+  await summarize({
+    prompt: 'p',
+    response: 'r',
+    apiKey: '',
+    fetchImpl: fakeFetch([]),
+    logFailure: (c) => seen.push(c),
+  });
+  assert.deepEqual(seen, []);
+  await summarize({
+    prompt: 'p',
+    response: 'r',
+    apiKey: 'sk',
+    cache: makeCache(),
+    fetchImpl: fakeFetch([jsonResponse('USER: a\nCLAUDE: b')]),
+    logFailure: (c) => seen.push(c),
+  });
+  assert.deepEqual(seen, []);
+});
+
+test('summarizeBatch: logFailure called on non-2xx and parse failures', async () => {
+  const seen = [];
+  await summarizeBatch({
+    events: [{ status: 'ready', prompt: 'a', response: 'b' }],
+    apiKey: 'sk',
+    fetchImpl: fakeFetch([{ ok: false, status: 401, json: async () => ({}) }]),
+    logFailure: (c) => seen.push(c),
+  });
+  await summarizeBatch({
+    events: [{ status: 'ready', prompt: 'a', response: 'b' }],
+    apiKey: 'sk',
+    fetchImpl: fakeFetch([jsonResponse('   \n  ')]),
+    logFailure: (c) => seen.push(c),
+  });
+  assert.deepEqual(seen, ['auth', 'parse']);
+});
+
 test('buildDigestUserMessage: formats events with status, prompt, response', () => {
   const text = buildDigestUserMessage([
     { status: 'ready', statusLabel: 'Done', prompt: 'a', response: 'b' },

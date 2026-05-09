@@ -61,6 +61,29 @@ belfry is the inverse: outbound-only at first, then bidirectional, multi-termina
 
 **Two processes.** The daemon owns the bot, polls Telegram, and runs the chokidar watcher → composer chain for outbound. Each session you want bidirectional runs a tiny `belfry-mcp` stdio plugin that registers with the daemon and long-polls for replies. When a reply arrives, the plugin emits MCP `notifications/claude/channel` to inject the text into its parent claude — the same mechanism the bundled `plugin:telegram` uses for one-session bidirectional, generalized to N sessions sharing one bot.
 
+## Trust model
+
+Read this before pasting your bot token anywhere. Belfry's design is small and the threat model is short, but the consequences are sharp.
+
+**Your bot token + chat ID together are equivalent to a shell credential.** When inbound is enabled, any Telegram message from `BELFRY_CHAT_ID` is injected into the matching Claude Code session as user input — same path your keyboard goes through. That includes "run this shell command", "delete this directory", "read this file and post the contents." Treat `BELFRY_TOKEN` like an SSH private key, not like a webhook URL.
+
+What this implies:
+
+1. **Don't post `BELFRY_TOKEN` in screenshots, logs, dotfile backups, or shared screen sessions.** Use a secret store (env loaded from your shell startup, age-encrypted YAML, `pass`, AWS Secrets Manager — whatever you already use). Belfry never reads tokens from disk inside the project; it only takes env vars. The launcher that sets the env is your responsibility.
+2. **Rotate immediately if you suspect leak.** Message [@BotFather](https://t.me/BotFather) → `/revoke` → pick the bot → copy the new token. The old token is dead instantly and any attacker holding it loses access at the API edge. Update your launcher's secret store with the new value and restart belfry.
+3. **One chat, one user.** Inbound messages from any chat ID other than `BELFRY_CHAT_ID` are silently dropped (`lib/router.js`). Don't add the bot to a group whose chat ID could collide; don't expand the allowlist without thinking through who that gives shell-equivalent access to.
+4. **The registry is loopback-only.** The daemon binds `127.0.0.1:49876` and gates `/register`, `/recv`, `/send`, `/unregister` on a 32-byte bearer token at `~/.local/state/belfry/registry.token` (mode 0600). Other UIDs on the same machine cannot register a fake slug or call `/send` to abuse your bot. Don't change this binding to `0.0.0.0` — the trust model assumes loopback.
+5. **`/tmp/claude-dashboard/` should be 0700 with files 0600.** belfry-hook and belfry's watcher both write at these perms. If you have an older directory created by an earlier `claudelike-bar` or `belfry-hook` at 0755, prompt and response text in `last_response` is readable by other UIDs on the host. The daemon warns at startup if it finds a wider mode; `chmod 700 /tmp/claude-dashboard` to tighten.
+6. **`ANTHROPIC_API_KEY`, if set, leaves the host.** The summarizer (`lib/summarizer.js`) sends prompts and responses to `https://api.anthropic.com/v1/messages` so they can be Haiku-summarized into the lock-screen ping. The endpoint is hardcoded — there is no env override and no redirect path — but the data does leave the machine. Anthropic's standard data-handling applies (zero-data-retention is on by default for API customers). Subscriptions opt-in to summarize per-slug; the no-key fallback is a hard truncate that never leaves the host.
+
+What belfry doesn't try to defend against:
+
+- A compromised host. If a process running as your UID can read `~/.local/state/belfry/registry.token`, it can register as any slug. That's fine — it can already read your SSH keys. The trust boundary is the host, not the process.
+- A compromised Telegram client. If your phone is rooted and an attacker can read messages or impersonate the bot via your account, belfry's chat-ID gate doesn't help. That's a "your phone is compromised" problem.
+- A coerced user. Someone holding your phone can send commands to running Claude sessions. Don't unlock Telegram next to people you don't trust.
+
+The repo is open source and tied to a real name. That's deliberate: the trust model is short enough to audit in a sitting, the codebase is ~15 small files with one runtime dependency (`chokidar`), and the loopback-only / chat-ID-only design narrows the attack surface to "guard your bot token." A public repo with auditable code is the right shape for a tool whose security posture is a few clear constraints rather than a wall of mitigations.
+
 ## What's shipped
 
 | Phase | Scope | Status |

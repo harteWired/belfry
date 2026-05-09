@@ -75,6 +75,26 @@ test('returns false when last_response is unchanged from previous (duplicate eve
   assert.equal(s.pending(), 42, 'marker preserved — real ready transition may still come');
 });
 
+test('fires when status flips to ready even if last_response matches the prior non-ready write', async () => {
+  // belfry-hook writes the dashboard JSON on PreToolUse / PostToolUse / Stop,
+  // tailing the same transcript each time — so the working→ready Stop write
+  // can carry the same last_response as the immediately prior PostToolUse
+  // write. The auto-reply guard must not reject this transition; rejecting
+  // it is the regression the v2 review flagged as critical.
+  const s = makeStubs(42);
+  const fired = maybeAutoReply({
+    slug: 'x',
+    statusFile: { status: 'ready', last_response: 'I added 13 tests' },
+    prevStatusFile: { status: 'working', last_response: 'I added 13 tests' },
+    newStatus: 'ready',
+    ...s,
+  });
+  assert.equal(fired, true);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(s.sent.length, 1);
+  assert.equal(s.pending(), null);
+});
+
 test('fires sendOutbound and clears marker on fresh response in ready state', async () => {
   const s = makeStubs(42);
   const fired = maybeAutoReply({

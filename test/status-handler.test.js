@@ -171,6 +171,45 @@ test('makeStatusHandler: routes all-slugs request when slug is null', async () =
   assert.match(sent[0].text, /2 sessions/);
 });
 
+test('makeStatusHandler: single-slug digest records its message_id against the slug', async () => {
+  const dir = tmpDir();
+  writeStatus(dir, 'belfry', { status: 'ready', last_response: 'shipped', updatedAt: Date.now() });
+  const recorded = [];
+  const handler = makeStatusHandler({
+    statusDir: dir,
+    send: async () => ({ message_id: 999 }),
+    recordReply: (msgId, slug) => recorded.push({ msgId, slug }),
+  });
+  await handler({ slug: 'belfry', messageId: 42 });
+  assert.deepEqual(recorded, [{ msgId: 999, slug: 'belfry' }]);
+});
+
+test('makeStatusHandler: all-slugs digest does NOT record (no slug to bind to)', async () => {
+  const dir = tmpDir();
+  writeStatus(dir, 's', { status: 'ready', updatedAt: Date.now() });
+  const recorded = [];
+  const handler = makeStatusHandler({
+    statusDir: dir,
+    send: async () => ({ message_id: 999 }),
+    recordReply: (msgId, slug) => recorded.push({ msgId, slug }),
+  });
+  await handler({ slug: null, messageId: 42 });
+  assert.equal(recorded.length, 0);
+});
+
+test('makeStatusHandler: skips recordReply if send returns no message_id', async () => {
+  const dir = tmpDir();
+  writeStatus(dir, 'belfry', { status: 'ready', updatedAt: Date.now() });
+  const recorded = [];
+  const handler = makeStatusHandler({
+    statusDir: dir,
+    send: async () => undefined, // older send signature, no return value
+    recordReply: (msgId, slug) => recorded.push({ msgId, slug }),
+  });
+  await handler({ slug: 'belfry', messageId: 42 });
+  assert.equal(recorded.length, 0);
+});
+
 test('makeStatusHandler: send failure logs but does not throw', async () => {
   const dir = tmpDir();
   const logs = [];

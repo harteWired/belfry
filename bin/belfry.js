@@ -120,6 +120,10 @@ async function main() {
     summarizeFn,
     send: ({ text, replyToMessageId }) =>
       sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
+    // For single-slug /status, record the digest message_id against the
+    // slug so a follow-up quote-reply lands on the same session.
+    // All-slugs digests pass slug=null inside the handler and skip recording.
+    recordReply: (msgId, slug) => replyTracker.record(msgId, slug),
     log,
   });
 

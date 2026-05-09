@@ -141,9 +141,14 @@ export function tailTranscript(transcriptPath) {
 }
 
 function writeAtomic(filePath, payload) {
-  mkdirSync(STATUS_DIR, { recursive: true });
+  // 0700 dir + 0600 files: the JSON carries last_prompt/last_response
+  // tailed from the transcript, which can include code being authored,
+  // pasted secrets, repo paths, etc. On default umask the dir lands at
+  // 0755 and files at 0644 (world-readable), making cross-UID reads
+  // trivial on a shared host. Tighten to owner-only.
+  mkdirSync(STATUS_DIR, { recursive: true, mode: 0o700 });
   const tmp = `${filePath}.tmp.${process.pid}`;
-  writeFileSync(tmp, JSON.stringify(payload));
+  writeFileSync(tmp, JSON.stringify(payload), { mode: 0o600 });
   renameSync(tmp, filePath);
 }
 

@@ -61,8 +61,13 @@ Recognized writer command names today: `claudelike-bar-hook`, `belfry-hook`. Too
 
 ## Privacy notes
 
-- The status JSON contains user prompts and assistant responses. `/tmp` permissions vary by host — writers should be aware that other local users may be able to read these files.
-- Slug index files contain project paths. Restrict to `0600` if implementing a writer.
+- The status JSON contains user prompts and assistant responses (often partial code, occasionally pasted secrets, repo paths). On a multi-user host these must not leak across UIDs.
+- **Required permissions for participating tools**:
+  - `/tmp/claude-dashboard/` directory: `0700` (owner-only).
+  - `/tmp/claude-dashboard/<slug>.json` files: `0600` (owner-only).
+  - `~/.claude/claude-session-slugs.json` and the legacy `claudelike-bar-paths.json`: `0600`.
+- Writers SHOULD pass these modes to `mkdirSync`/`writeFileSync` (or equivalent) explicitly rather than relying on the user's umask. Belfry does this in `bin/belfry-hook.js` and `lib/watcher.js`.
+- Readers MUST NOT loosen perms they observe on existing files. If a tool finds the dir at `0755` it's the user's pre-existing setup; tightening retroactively could break other tools they rely on.
 
 ## Versioning
 

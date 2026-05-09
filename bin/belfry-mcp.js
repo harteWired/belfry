@@ -253,12 +253,17 @@ async function recvLoop() {
     }
     if (res.status === 401) {
       log('daemon rejected auth — token may have rotated; re-reading');
-      // Best-effort: re-read the token file. If still wrong, back off.
+      // Best-effort: re-read the token file. If different, the daemon
+      // re-keyed; we can't hot-swap our cached header, so exit cleanly so
+      // Claude Code respawns us as a fresh process and we'll read the new
+      // token at startup. If it's the same, the daemon has us blocked for
+      // some other reason (e.g. our register went through but the daemon
+      // restarted) — back off and let the recv loop retry.
       const fresh = loadToken();
       if (fresh && fresh !== authToken) {
-        // Reassign via mutable closure isn't possible — log and exit;
-        // claude will respawn us with a fresh process and re-read.
         log('token changed on disk — exiting for respawn');
+        await shutdown('token-rotated'); // calls process.exit(0); does not return
+        return;
       }
       await sleep(RECONNECT_BACKOFF_MS);
       continue;

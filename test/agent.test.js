@@ -80,6 +80,42 @@ test('fastPathRoute: misses for unknown first token', () => {
   assert.equal(out, null);
 });
 
+test('fastPathRoute: question after a slug name falls through (not imperative)', () => {
+  // "belfry how are you?" — question, not a command. Agent should classify.
+  const cases = [
+    'belfry how are you doing?',
+    'belfry what is the status',
+    'belfry are you alive',
+    'belfry, are you ok?',
+    'belfry: how does this work?',
+  ];
+  for (const text of cases) {
+    const out = fastPathRoute({
+      text,
+      activeSlugs: ['belfry'],
+      resolveNickname: () => null,
+    });
+    assert.equal(out, null, `should not fast-path: ${text}`);
+  }
+});
+
+test('fastPathRoute: imperative shapes still fast-path', () => {
+  const cases = [
+    'belfry restart please',
+    'belfry run the deploy',
+    'belfry fix the failing test',
+  ];
+  for (const text of cases) {
+    const out = fastPathRoute({
+      text,
+      activeSlugs: ['belfry'],
+      resolveNickname: () => null,
+    });
+    assert.equal(out?.intent, 'route', `should fast-path: ${text}`);
+    assert.equal(out?.target_slug, 'belfry');
+  }
+});
+
 test('classify: fast-path bypasses the API call entirely', async () => {
   const fetchImpl = fakeFetch([]);
   const out = await classify({
@@ -113,9 +149,10 @@ test('classify: respond tool call → returned intent', async () => {
 });
 
 test('classify: route requires confidence ≥ MIN_CONFIDENCE; lower demotes to ambiguous', async () => {
+  // MIN_CONFIDENCE was lowered to 0.65; values just below should demote.
   const fetchImpl = fakeFetch([
     toolUseResponse([
-      makeRespond({ intent: 'route', target_slug: 'belfry', body: 'restart', confidence: 0.6 }),
+      makeRespond({ intent: 'route', target_slug: 'belfry', body: 'restart', confidence: 0.5 }),
     ]),
   ]);
   const out = await classify({
@@ -127,6 +164,53 @@ test('classify: route requires confidence ≥ MIN_CONFIDENCE; lower demotes to a
   });
   assert.equal(out.intent, 'ambiguous');
   assert.deepEqual(out.candidates, ['belfry']);
+});
+
+test('classify: passes contextBlock into the user message', async () => {
+  const fetchImpl = fakeFetch([
+    toolUseResponse([makeRespond({ intent: 'ask', message: 'noted' })]),
+  ]);
+  await classify({
+    text: 'and what about belfry?',
+    apiKey: 'sk',
+    activeSlugs: ['belfry'],
+    nicknames: {},
+    contextBlock: 'Recent context (most recent last):\nUser: tell me about life-planner\nBelfry: it just shipped',
+    fetchImpl,
+  });
+  const userMsg = fetchImpl.calls[0].init.body.messages[0].content;
+  assert.match(userMsg, /Recent context/);
+  assert.match(userMsg, /life-planner/);
+});
+
+test('classify: get_help_text tool is in the request and resolves locally', async () => {
+  const fetchImpl = fakeFetch([
+    toolUseResponse([
+      { type: 'tool_use', id: 'tu_h', name: 'get_help_text', input: { topic: 'nicknames' } },
+    ]),
+    toolUseResponse([makeRespond({ intent: 'ask', message: 'see above' })]),
+  ]);
+  const seen = [];
+  await classify({
+    text: 'how do nicknames work',
+    apiKey: 'sk',
+    activeSlugs: [],
+    nicknames: {},
+    tools: {
+      list_sessions: () => [],
+      get_session: () => null,
+      recent_messages: () => [],
+      get_help_text: ({ topic }) => { seen.push(topic); return `(canned text for ${topic})`; },
+    },
+    fetchImpl,
+  });
+  // The tool registry is internal to the classify caller, not the request body.
+  // What we need to verify: the tools object's get_help_text was invoked.
+  assert.deepEqual(seen, ['nicknames']);
+  // And the second classify call gets the tool result.
+  const lastMsg = fetchImpl.calls[1].init.body.messages.at(-1);
+  assert.equal(lastMsg.content[0].type, 'tool_result');
+  assert.match(lastMsg.content[0].content, /canned text for nicknames/);
 });
 
 test('classify: tool turn — model calls list_sessions, then respond', async () => {

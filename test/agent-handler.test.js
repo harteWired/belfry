@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { makeAgentHandler } from '../lib/agent-handler.js';
 import { NicknameRegistry } from '../lib/nicknames.js';
 import { RecentMessages } from '../lib/recent-messages.js';
+import { ConversationMemory } from '../lib/conversation-memory.js';
 
 function fakeSender() {
   const calls = [];
@@ -166,6 +167,61 @@ test('readStatus: invoked with slug and active set; can stub fs entirely', async
   });
   await h({ text: 'how is belfry', messageId: 900 });
   assert.deepEqual(seen, [{ slug: 'belfry', present: true }]);
+});
+
+test('memory: records user turn before classifying and assistant turn after', async () => {
+  const memory = new ConversationMemory();
+  const send = fakeSender();
+  let classifyChatId;
+  const h = makeAgentHandler({
+    ...baseDeps({ memory, chatId: 12345 }),
+    send,
+    classifyFn: async (args) => {
+      // At classify time, the user turn should already be in memory so
+      // contextBlock for follow-ups is correct. We don't assert on contextBlock
+      // here (this is the first turn — block is empty) but the next call would.
+      classifyChatId = 12345;
+      return { intent: 'ask', message: 'replied' };
+    },
+  });
+  await h({ text: 'hello there', messageId: 1 });
+  const turns = memory.recent(12345);
+  assert.equal(turns.length, 2);
+  assert.equal(turns[0].role, 'user');
+  assert.equal(turns[0].text, 'hello there');
+  assert.equal(turns[1].role, 'assistant');
+  assert.equal(turns[1].text, 'replied');
+});
+
+test('memory: passes contextBlock from previous turns into classifyFn', async () => {
+  const memory = new ConversationMemory();
+  memory.push(99, { role: 'user', text: 'tell me about belfry' });
+  memory.push(99, { role: 'assistant', text: 'belfry is up' });
+
+  let captured;
+  const h = makeAgentHandler({
+    ...baseDeps({ memory, chatId: 99 }),
+    classifyFn: async (args) => {
+      captured = args.contextBlock;
+      return { intent: 'ask', message: 'k' };
+    },
+  });
+  await h({ text: 'what about life-planner?', messageId: 2 });
+  assert.match(captured ?? '', /tell me about belfry/);
+  assert.match(captured ?? '', /belfry is up/);
+});
+
+test('memory: opt-out — no memory wired means no contextBlock and no recording', async () => {
+  let captured;
+  const h = makeAgentHandler({
+    ...baseDeps({ memory: null, chatId: null }),
+    classifyFn: async (args) => {
+      captured = args.contextBlock;
+      return { intent: 'ask', message: 'k' };
+    },
+  });
+  await h({ text: 'hi', messageId: 3 });
+  assert.equal(captured, '');
 });
 
 test('classifyFn receives active slugs and nickname map', async () => {

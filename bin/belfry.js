@@ -20,8 +20,11 @@ import { makeStatusHandler } from '../lib/status-handler.js';
 import { makeDigestFlush } from '../lib/digest-flush.js';
 import { NicknameRegistry } from '../lib/nicknames.js';
 import { makeNickHandler } from '../lib/nick-handler.js';
+import { makeHelpHandler } from '../lib/help-handler.js';
 import { RecentMessages } from '../lib/recent-messages.js';
 import { makeAgentHandler } from '../lib/agent-handler.js';
+import { ConversationMemory } from '../lib/conversation-memory.js';
+import { getHelpText } from '../lib/help-text.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -176,15 +179,26 @@ async function main() {
     log,
   });
 
+  const helpHandler = makeHelpHandler({
+    send: ({ text, replyToMessageId }) =>
+      sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
+    log,
+  });
+
   // Conversational agent (#13). Activates only when ANTHROPIC_API_KEY is
   // set; otherwise the handler still runs but classify() returns a decline
   // immediately. getActiveSlugs uses the in-memory cache (no readdir on
   // every Telegram message); the cold-path /nick validation in
   // NicknameRegistry uses the readdir variant directly via watcher.getActiveSlugs.
+  // Per-chat memory keeps recent turns in the classify prompt so follow-ups
+  // and disambiguation replies have context.
+  const conversationMemory = new ConversationMemory();
   const agentHandler = makeAgentHandler({
     apiKey: anthropicApiKey,
     nicknames,
     recentMessages,
+    memory: conversationMemory,
+    chatId: Number(chatId),
     getActiveSlugs: () => (watcher ? watcher.getActiveSlugsFromCache() : new Set()),
     statusDir: undefined, // resolved by readStatus closure below
     readStatus: (slug, activeSlugSet) => {
@@ -212,6 +226,7 @@ async function main() {
     target: registry,
     onStatusRequest: statusHandler,
     onNickRequest: nickHandler,
+    onHelpRequest: helpHandler,
     onUnmatched: agentHandler,
     resolveNickname: (token) => nicknames.resolve(token),
     log,

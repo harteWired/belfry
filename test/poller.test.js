@@ -311,6 +311,55 @@ test('tick: unmatched goes to onUnmatched if wired', async () => {
   assert.equal(seen[0].text, 'hello belfry');
 });
 
+test('tick: /help routes to onHelpRequest', async () => {
+  const updates = [
+    {
+      update_id: 950,
+      message: { message_id: 95, chat: { id: CHAT }, text: '/help nicknames' },
+    },
+  ];
+  const replyTracker = new ReplyTracker();
+  const target = fakeTarget();
+  const seen = [];
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker,
+    target,
+    fetchFn: fakeOk(updates),
+    onHelpRequest: async (action) => { seen.push(action); },
+  });
+  await poller.tick();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].action, 'help');
+  assert.equal(seen[0].topic, 'nicknames');
+});
+
+test('tick: bare "status" (no slash) routes to onStatusRequest', async () => {
+  const updates = [
+    {
+      update_id: 960,
+      message: { message_id: 96, chat: { id: CHAT }, text: 'status' },
+    },
+  ];
+  const replyTracker = new ReplyTracker();
+  const target = fakeTarget();
+  const seen = [];
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker,
+    target,
+    fetchFn: fakeOk(updates),
+    onStatusRequest: async (req) => { seen.push(req); },
+  });
+  await poller.tick();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].slug, null);
+});
+
 test('tick: unmatched dropped silently when onUnmatched not wired', async () => {
   const updates = [
     {

@@ -203,6 +203,54 @@ test('reserved tokens never deliver via prefix path even if a slug literally mat
   }
 });
 
+test('reserved commands accept no-slash prefix: status, nicks, help', () => {
+  // /status equivalent
+  let r = route({ update: update({ text: 'status' }), ...ctx() });
+  assert.deepEqual(r, { action: 'status', slug: null, messageId: 99 });
+
+  r = route({ update: update({ text: 'status belfry' }), ...ctx() });
+  assert.deepEqual(r, { action: 'status', slug: 'belfry', messageId: 99 });
+
+  // /nicks equivalent
+  r = route({ update: update({ text: 'nicks' }), ...ctx() });
+  assert.deepEqual(r, { action: 'nick-list', messageId: 99 });
+
+  // /help (new) — slashed and bare
+  r = route({ update: update({ text: 'help' }), ...ctx() });
+  assert.deepEqual(r, { action: 'help', topic: null, messageId: 99 });
+
+  r = route({ update: update({ text: '/help nicknames' }), ...ctx() });
+  assert.deepEqual(r, { action: 'help', topic: 'nicknames', messageId: 99 });
+
+  r = route({ update: update({ text: 'help routing' }), ...ctx() });
+  assert.deepEqual(r, { action: 'help', topic: 'routing', messageId: 99 });
+});
+
+test('reserved commands no-slash: nick set + unset (strict shape)', () => {
+  // Two-arg shape
+  let r = route({ update: update({ text: 'nick lp life-planner' }), ...ctx() });
+  assert.deepEqual(r, { action: 'nick-set', nickname: 'lp', slug: 'life-planner', messageId: 99 });
+
+  // One-arg unset shape
+  r = route({ update: update({ text: 'unnick lp' }), ...ctx() });
+  assert.deepEqual(r, { action: 'nick-unset', nickname: 'lp', messageId: 99 });
+
+  // Conversational "nick the variable was renamed" doesn't match (3+ tokens)
+  r = route({ update: update({ text: 'nick the variable was renamed' }), ...ctx() });
+  assert.equal(r.action, 'unmatched');
+
+  // Conversational "unnick someone" with arbitrary trailing text doesn't match
+  r = route({ update: update({ text: 'unnick all of them please' }), ...ctx() });
+  assert.equal(r.action, 'unmatched');
+});
+
+test('/help with unknown topic falls through to action=help with topic preserved', () => {
+  // Router doesn't validate the topic — that's the help handler's job. We
+  // just confirm any [a-z0-9-]+ word makes it through.
+  const r = route({ update: update({ text: 'help mystery' }), ...ctx() });
+  assert.deepEqual(r, { action: 'help', topic: 'mystery', messageId: 99 });
+});
+
 test('backwards compat: knownSlugs Set still works without hasSlug', () => {
   const replyTracker = new ReplyTracker();
   const r = route({

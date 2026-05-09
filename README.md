@@ -4,6 +4,8 @@ Telegram-to-terminal MUX rigging for remote driving of multiple Claude Code proj
 
 Single-user, single-platform (Telegram), single-host (loopback). Read `CLAUDE.md` for the architecture and design constraints.
 
+**Live page:** [hartewired.github.io/belfry](https://hartewired.github.io/belfry/) — overview, architecture, trust model, quick start.
+
 ## What it does
 
 Two flows, one daemon.

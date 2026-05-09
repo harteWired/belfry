@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>belfry — one bot, many sessions</title>
+  <meta name="description" content="Telegram-to-terminal MUX rigging for remote-driving multiple Claude Code projects. One bot, one chat, N parallel sessions — outbound status fans into one feed, replies route back into the matching session.">
+
+  <link rel="canonical" href="https://hartewired.github.io/belfry/">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://hartewired.github.io/belfry/">
+  <meta property="og:title" content="belfry — one bot, many sessions">
+  <meta property="og:description" content="Telegram-to-terminal MUX rigging for remote-driving multiple Claude Code projects.">
+  <meta property="og:site_name" content="harteWired Lab">
+
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="belfry — one bot, many sessions">
+  <meta name="twitter:description" content="Telegram-to-terminal MUX rigging for remote-driving multiple Claude Code projects.">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareSourceCode",
+    "name": "belfry",
+    "description": "Telegram-to-terminal MUX rigging for remote-driving multiple Claude Code projects.",
+    "url": "https://hartewired.github.io/belfry/",
+    "codeRepository": "https://github.com/harteWired/belfry",
+    "programmingLanguage": "JavaScript",
+    "runtimePlatform": "Node.js",
+    "author": {
+      "@type": "Person",
+      "name": "Matt Harte",
+      "url": "https://mattharte.com/",
+      "sameAs": [
+        "https://github.com/harteWired",
+        "https://www.linkedin.com/in/matt-harte/"
+      ]
+    }
+  }
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Playfair+Display:ital,wght@0,700;1,700&display=swap" rel="stylesheet">
+
+  <style>
+    /* ============================================================
+       PORTFOLIO SHELL — harteWired design system
+       Pasted verbatim from web-design-pipeline/shells/portfolio-shell.css
+       Patch the source file first, then re-paste here.
+       ============================================================ */
+    /* SHELL_VERSION: 1.1.0 */
+
+    :root {
+      --color-ink:    oklch(0.13 0.015 270);
+      --color-cream:  oklch(0.93 0.01 90);
+      --color-ember:  oklch(0.78 0.14 55);
+      --color-sage:   oklch(0.72 0.12 165);
+      --color-iris:   oklch(0.45 0.12 290);
+      --color-clay:   oklch(0.59 0.13 35);
+      --color-onyx:   oklch(0.17 0.012 270);
+      --color-slate:  oklch(0.21 0.01 270);
+      --color-pewter: oklch(0.40 0.022 270);
+      --color-mist:   oklch(0.60 0.02 270);
+      --color-linen:  oklch(0.74 0.012 90);
+      --color-bone:   oklch(0.84 0.014 90);
+      --color-fern:    oklch(0.55 0.13 140);
+      --color-saffron: oklch(0.79 0.16 80);
+      --color-garnet:  oklch(0.50 0.18 18);
+      --color-sky:     oklch(0.61 0.12 245);
+
+      --color-bg-base: var(--color-ink);
+      --color-bg-surface: var(--color-onyx);
+      --color-bg-elevated: var(--color-slate);
+      --color-fg-base: var(--color-cream);
+      --color-fg-muted: var(--color-mist);
+      --color-fg-subtle: oklch(0.58 0.015 270);
+      --color-accent-primary: var(--color-ember);
+      --color-accent-secondary: var(--color-sage);
+      --color-accent-glow: oklch(0.78 0.14 55 / 0.15);
+
+      --font-heading: 'Playfair Display', Georgia, serif;
+      --font-body: 'Inter', system-ui, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+      --font-weight-heading: 700;
+      --font-weight-body: 400;
+      --font-weight-medium: 500;
+      --font-weight-semibold: 600;
+
+      --text-sm: 0.75rem;
+      --text-base: 1rem;
+      --text-1: 1.333rem;
+      --text-2: 1.777rem;
+      --text-3: 2.369rem;
+      --text-4: 3.157rem;
+      --text-5: 4.209rem;
+      --text-6: 5.61rem;
+      --font-size-hero: clamp(2.5rem, 5vw + 1rem, var(--text-6));
+      --line-height-body: 1.65;
+      --line-height-heading: 1.1;
+      --letter-spacing-overline: 0.12em;
+
+      --space-xs: 0.25rem;
+      --space-sm: 0.5rem;
+      --space-md: 1rem;
+      --space-lg: 1.5rem;
+      --space-xl: 2.5rem;
+      --space-2xl: 4rem;
+      --space-3xl: 6rem;
+      --space-section: clamp(4rem, 10vh, 8rem);
+
+      --grid-max-width: 1280px;
+      --grid-margin: clamp(1.5rem, 5vw, 4rem);
+      --grid-gap: 1.5rem;
+
+      --ease-dramatic: cubic-bezier(0.16, 1, 0.3, 1);
+      --ease-entrance: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+      --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+      --duration-micro: 200ms;
+      --duration-hover: 280ms;
+      --duration-entrance: 700ms;
+      --duration-hero: 1200ms;
+      --stagger-delay: 70ms;
+
+      --shadow-sm: 0 1px 3px oklch(0 0 0 / 0.3);
+      --shadow-md: 0 8px 24px oklch(0 0 0 / 0.4);
+      --shadow-lg: 0 16px 48px oklch(0 0 0 / 0.5);
+
+      --radius-sm: 0.25rem;
+      --radius-md: 0.5rem;
+      --radius-lg: 0.75rem;
+      --border-subtle: 1px solid oklch(1 0 0 / 0.06);
+
+      --z-bg-effect: -1;
+      --z-base: 1;
+      --z-nav: 100;
+      --z-overlay: 500;
+
+      --bg-effect-opacity: 0.35;
+      --cursor-spotlight-size: 600px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: auto; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; overflow-x: clip; }
+    body { font-family: var(--font-body); font-weight: var(--font-weight-body); font-size: var(--text-base); line-height: var(--line-height-body); color: var(--color-fg-base); background-color: var(--color-bg-base); overflow-x: clip; }
+    img, svg, video { display: block; max-width: 100%; }
+    a { color: inherit; text-decoration: none; }
+    ul, ol { list-style: none; }
+    button { font: inherit; cursor: pointer; }
+
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+    .skip-link { position: fixed; top: var(--space-md); left: var(--space-md); z-index: calc(var(--z-overlay) + 100); padding: var(--space-sm) var(--space-md); background: var(--color-accent-primary); color: var(--color-bg-base); font-family: var(--font-body); font-weight: var(--font-weight-semibold); font-size: var(--text-sm); border-radius: var(--radius-sm); transform: translateY(-200%); transition: transform var(--duration-micro) var(--ease-standard); }
+    .skip-link:focus { transform: translateY(0); }
+
+    .grain { position: fixed; inset: 0; z-index: 9999; pointer-events: none; opacity: var(--bg-effect-opacity); mix-blend-mode: overlay; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); background-repeat: repeat; background-size: 256px 256px; }
+    .cursor-spotlight { position: fixed; top: 0; left: 0; width: var(--cursor-spotlight-size); height: var(--cursor-spotlight-size); border-radius: 50%; background: radial-gradient(circle, var(--color-accent-glow) 0%, transparent 70%); pointer-events: none; z-index: var(--z-bg-effect); opacity: 0; transform: translate(-50%, -50%); transition: opacity var(--duration-entrance) var(--ease-standard); }
+    body:hover .cursor-spotlight { opacity: 1; }
+
+    .morphing-blobs { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
+    .morphing-blobs svg { width: 100%; height: 100%; }
+    @media (max-width: 768px) {
+      .morphing-blobs svg { width: 250%; height: 100%; margin-left: -75%; }
+      .morphing-blobs__blob--0 { opacity: 0.3; filter: blur(60px); }
+      .morphing-blobs__blob--1 { opacity: 0.22; filter: blur(70px); }
+      .morphing-blobs__blob--2 { opacity: 0.18; filter: blur(80px); }
+    }
+    .morphing-blobs__blob--0 { fill: var(--color-accent-primary); opacity: 0.2; animation: morphing-blobs-morph-0 20s ease-in-out 0s infinite alternate; filter: blur(50px); }
+    .morphing-blobs__blob--1 { fill: var(--color-accent-secondary); opacity: 0.15; animation: morphing-blobs-morph-1 24s ease-in-out -3s infinite alternate; filter: blur(60px); }
+    .morphing-blobs__blob--2 { fill: oklch(0.45 0.12 290); opacity: 0.12; animation: morphing-blobs-morph-2 28s ease-in-out -6s infinite alternate; filter: blur(70px); }
+
+    @keyframes morphing-blobs-morph-0 {
+      0%   { d: path("M300,150.18 C374.45,150.86 379.44,159.9 422.13,229.49 C464.82,299.08 478.93,314.86 442.29,382.15 C405.65,449.44 375.23,459.64 300,453.78 C224.77,447.92 229.32,430.6 191.51,362.63 C153.7,294.67 141.42,290.96 173.97,227.23 C206.52,163.5 225.55,149.5 300,150.18"); }
+      33%  { d: path("M300,169.06 C382.41,171.28 388.05,160.37 430.93,224.41 C473.81,288.45 482.22,317.13 442.94,382.53 C403.66,447.93 376.55,447.73 300,442.41 C223.45,437.09 230.9,432.42 187.77,364.8 C144.64,297.18 122.56,275.72 156.23,217 C189.9,158.28 217.59,166.84 300,169.06"); }
+      66%  { d: path("M300,141.85 C373.59,144.48 382.2,167.13 415.08,233.56 C447.96,299.99 444.13,300.14 409.61,363.28 C375.09,426.42 373.09,439.81 300,444.04 C226.91,448.27 205.05,443.14 165.98,377.37 C126.91,311.6 129.56,295.47 169.77,224.81 C209.98,154.15 226.41,139.23 300,141.85"); }
+      100% { d: path("M300,184.58 C367.38,180.79 380.79,169.7 423.25,228.84 C465.71,287.98 478.52,324.93 441.54,381.72 C404.57,438.51 381.26,420.27 300,418.15 C218.75,416.03 201.09,427.66 170.69,374.66 C140.29,321.66 159.87,298.51 198.66,241.49 C237.45,184.47 232.62,188.38 300,184.58"); }
+    }
+    @keyframes morphing-blobs-morph-1 {
+      0%   { d: path("M300,150.5 C399.98,151.11 419.92,133.99 464.89,204.8 C509.86,275.61 499.36,316.38 449.89,386.54 C400.42,456.7 383.58,442.33 300,438.66 C216.42,434.99 221.8,445.08 171.28,374.32 C120.76,303.56 92.99,269.93 131.61,202.78 C170.23,135.63 200.02,149.89 300,150.5"); }
+      33%  { d: path("M300,129.84 C386.38,122.07 425.18,129.08 466.4,203.93 C507.62,278.78 487.32,300.24 437.4,379.33 C387.48,458.42 377.43,470.47 300,467.57 C222.57,464.68 215.77,441 179.31,369.68 C142.85,298.36 142.27,301.79 178.48,229.84 C214.69,157.89 213.62,137.61 300,129.84"); }
+      66%  { d: path("M300,125.13 C387.08,122.12 413.92,135.7 453.82,211.19 C493.72,286.69 479.15,295.85 433,376.78 C386.85,457.71 379.16,481.33 300,480.97 C220.84,480.61 210.06,453.5 169.12,375.57 C128.18,297.65 124.28,296.35 163.54,221.22 C202.8,146.09 212.92,128.14 300,125.13"); }
+      100% { d: path("M300,112.68 C391.55,106.88 424.77,120.3 469.34,202.23 C513.91,284.16 499.36,311.21 448.56,385.77 C397.76,460.33 385.16,453.07 300,450.77 C214.84,448.48 205.44,446.88 164.69,378.12 C123.94,309.36 123.58,301.21 164.17,221.58 C204.76,141.95 208.45,118.49 300,112.68"); }
+    }
+    @keyframes morphing-blobs-morph-2 {
+      0%   { d: path("M300,87.68 C405.44,84.57 424.47,94.87 484.72,193.35 C544.97,291.83 556.24,334.33 500.82,415.94 C445.4,497.55 420.82,465.18 300,465.37 C179.18,465.56 148.12,495.06 98.09,416.57 C48.07,338.08 72.68,302.4 133.25,203.73 C193.82,105.06 194.56,90.79 300,87.68"); }
+      33%  { d: path("M300,66.97 C395.05,71.06 403.16,120.37 446.6,215.36 C490.04,310.35 488.77,310.3 444.79,383.59 C400.81,456.88 392.01,456.69 300,459.65 C207.99,462.61 189.17,470.85 138.1,393.47 C87.03,316.09 81.21,299.67 129.78,201.72 C178.35,103.77 204.95,62.88 300,66.97"); }
+      66%  { d: path("M300,93.14 C406.54,85.76 456.13,98.44 498.88,185.18 C541.63,271.92 502.16,283.21 442.5,382.27 C382.84,481.33 403.14,505.21 300,515.39 C196.86,525.58 145.58,507.9 98.7,416.22 C51.82,324.54 83.35,306.7 143.74,209.78 C204.13,112.86 193.46,100.52 300,93.14"); }
+      100% { d: path("M300,85.64 C406.49,95.34 397.64,119.44 449.5,213.69 C501.36,307.94 517.72,306.86 472.87,399.8 C428.02,492.74 395.5,528.24 300,523.49 C204.5,518.74 216.19,486.62 154.55,383.98 C92.91,281.34 50.9,270.87 94.53,181.37 C138.17,91.87 193.51,75.94 300,85.64"); }
+    }
+
+    .nav { position: fixed; top: 0; left: 0; right: 0; z-index: var(--z-nav); padding: var(--space-lg) var(--grid-margin); transition: background-color var(--duration-hover) var(--ease-standard), padding var(--duration-hover) var(--ease-standard), backdrop-filter var(--duration-hover) var(--ease-standard); }
+    .nav--scrolled { padding-block: var(--space-md); background-color: oklch(0.13 0.015 270 / 0.85); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-bottom: var(--border-subtle); }
+    .nav nav { display: flex; align-items: center; justify-content: space-between; max-width: var(--grid-max-width); margin-inline: auto; }
+    .nav__logo { display: flex; align-items: center; gap: var(--space-sm); font-family: var(--font-mono); font-size: var(--text-1); font-weight: var(--font-weight-semibold); color: var(--color-accent-primary); letter-spacing: -0.02em; }
+    .nav__rabbit { width: 36px; height: 36px; object-fit: contain; filter: drop-shadow(0 0 8px oklch(0.72 0.12 165 / 0.4)); }
+    .nav__links { display: flex; gap: var(--space-xl); }
+    .nav__link { font-size: var(--text-sm); font-weight: var(--font-weight-medium); color: var(--color-fg-muted); text-transform: uppercase; letter-spacing: var(--letter-spacing-overline); transition: color var(--duration-micro) var(--ease-standard); position: relative; }
+    .nav__link::after { content: ''; position: absolute; bottom: -4px; left: 0; width: 0; height: 1px; background: var(--color-accent-primary); transition: width var(--duration-hover) var(--ease-dramatic); }
+    .nav__link:hover, .nav__link:focus-visible { color: var(--color-fg-base); }
+    .nav__link:hover::after, .nav__link:focus-visible::after { width: 100%; }
+    .nav__toggle { display: none; flex-direction: column; gap: 6px; padding: var(--space-sm); background: none; border: none; }
+    .nav__toggle-bar { display: block; width: 24px; height: 2px; background: var(--color-fg-base); transition: transform var(--duration-hover) var(--ease-dramatic); }
+    .nav__toggle[aria-expanded="true"] .nav__toggle-bar:first-child { transform: translateY(4px) rotate(45deg); }
+    .nav__toggle[aria-expanded="true"] .nav__toggle-bar:last-child { transform: translateY(-4px) rotate(-45deg); }
+    .nav-overlay { position: fixed; inset: 0; z-index: calc(var(--z-nav) - 1); display: flex; align-items: center; justify-content: center; background: oklch(0.13 0.015 270 / 0.95); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); opacity: 0; pointer-events: none; transition: opacity var(--duration-entrance) var(--ease-standard); }
+    .nav-overlay--open { opacity: 1; pointer-events: auto; }
+    .nav-overlay__links { display: flex; flex-direction: column; align-items: center; gap: var(--space-xl); }
+    .nav-overlay__link { font-family: var(--font-heading); font-size: var(--text-3); font-weight: var(--font-weight-heading); color: var(--color-fg-base); transition: color var(--duration-micro) var(--ease-standard); }
+    .nav-overlay__link:hover, .nav-overlay__link:focus-visible { color: var(--color-accent-primary); }
+    @media (max-width: 768px) { .nav__links { display: none; } .nav__toggle { display: flex; } }
+
+    .btn { display: inline-flex; align-items: center; gap: var(--space-sm); padding: var(--space-md) var(--space-xl); font-family: var(--font-body); font-size: var(--text-sm); font-weight: var(--font-weight-semibold); text-transform: uppercase; letter-spacing: var(--letter-spacing-overline); border-radius: var(--radius-sm); border: 1px solid transparent; cursor: pointer; transition: transform var(--duration-hover) var(--ease-dramatic), box-shadow var(--duration-hover) var(--ease-dramatic), background-color var(--duration-hover) var(--ease-standard), color var(--duration-hover) var(--ease-standard), border-color var(--duration-hover) var(--ease-standard); }
+    .btn--primary { background: var(--color-accent-primary); color: var(--color-bg-base); border-color: var(--color-accent-primary); }
+    .btn--primary:hover, .btn--primary:focus-visible { transform: translateY(-2px); box-shadow: 0 4px 20px var(--color-accent-glow); }
+    .btn--ghost { background: transparent; color: var(--color-fg-muted); border-color: var(--color-fg-subtle); }
+    .btn--ghost:hover, .btn--ghost:focus-visible { color: var(--color-fg-base); border-color: var(--color-fg-muted); transform: translateY(-2px); }
+    .btn:active { transform: translateY(0); }
+    .btn:focus-visible { outline: 2px solid var(--color-accent-primary); outline-offset: 2px; }
+
+    .section { padding: var(--space-section) var(--grid-margin); position: relative; }
+    .section__container { max-width: var(--grid-max-width); margin-inline: auto; }
+    .section__header { margin-bottom: var(--space-3xl); }
+    .section__overline { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-accent-primary); text-transform: uppercase; letter-spacing: var(--letter-spacing-overline); margin-bottom: var(--space-md); }
+    .section__heading { font-family: var(--font-heading); font-size: clamp(var(--text-3), 4vw, var(--text-5)); font-weight: var(--font-weight-heading); line-height: var(--line-height-heading); color: var(--color-fg-base); margin-bottom: var(--space-md); }
+    .section__description { font-size: var(--text-1); color: var(--color-fg-muted); max-width: 40rem; }
+    .section--surface { background: var(--color-bg-surface); border-top: var(--border-subtle); border-bottom: var(--border-subtle); }
+
+    /* .reveal — progressive enhancement: visible by default; only hidden when JS marks <html class="js"> */
+    .js .reveal { opacity: 0; transform: translateY(24px); transition: opacity var(--duration-entrance) var(--ease-entrance), transform var(--duration-entrance) var(--ease-entrance); }
+    .js .reveal.is-visible { opacity: 1; transform: none; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
+      .reveal { opacity: 1; transform: none; }
+      .cursor-spotlight { display: none; }
+      .morphing-blobs__blob--0, .morphing-blobs__blob--1, .morphing-blobs__blob--2 { animation: none !important; }
+    }
+
+    /* ---- page-specific CSS below this line ---- */
+
+    /* HERO */
+    .hero { position: relative; min-height: 100svh; display: flex; align-items: center; padding: calc(var(--space-3xl) + var(--space-xl)) var(--grid-margin) var(--space-3xl); overflow: hidden; }
+    .hero__container { max-width: var(--grid-max-width); margin-inline: auto; width: 100%; display: grid; grid-template-columns: 1.1fr 0.9fr; gap: var(--space-2xl); align-items: center; }
+    .hero__content { position: relative; z-index: 2; }
+    .hero__overline { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-accent-primary); text-transform: uppercase; letter-spacing: var(--letter-spacing-overline); margin-bottom: var(--space-lg); }
+    .hero__overline::before { content: '/'; color: var(--color-fg-subtle); margin-right: var(--space-sm); }
+    .hero__headline { font-family: var(--font-heading); font-size: var(--font-size-hero); font-weight: var(--font-weight-heading); line-height: 0.95; color: var(--color-fg-base); margin-bottom: var(--space-lg); letter-spacing: -0.02em; }
+    .hero__headline em { font-style: italic; color: var(--color-accent-primary); }
+    .hero__subhead { font-size: var(--text-1); color: var(--color-fg-muted); max-width: 36rem; margin-bottom: var(--space-xl); }
+    .hero__subhead code { font-family: var(--font-mono); font-size: 0.92em; color: var(--color-fg-base); background: var(--color-bg-surface); padding: 0.1em 0.45em; border-radius: var(--radius-sm); border: var(--border-subtle); }
+    .hero__cta { display: flex; gap: var(--space-md); flex-wrap: wrap; align-items: center; }
+    .hero__meta { margin-top: var(--space-xl); display: flex; gap: var(--space-lg); font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-fg-subtle); flex-wrap: wrap; }
+    .hero__meta span { display: inline-flex; align-items: center; gap: var(--space-xs); }
+    .hero__meta strong { color: var(--color-fg-muted); font-weight: var(--font-weight-medium); }
+
+    .hero__visual { position: relative; aspect-ratio: 1; max-width: 480px; justify-self: center; width: 100%; }
+    .hero__rings { position: absolute; inset: 0; width: 100%; height: 100%; }
+    .hero__rabbit { position: absolute; inset: 0; margin: auto; width: 70%; height: 70%; object-fit: contain; filter: drop-shadow(0 0 60px oklch(0.78 0.14 55 / 0.18)); opacity: 0.92; }
+    .hero__bell { position: absolute; right: 6%; top: 4%; width: 24%; aspect-ratio: 1; border-radius: 50%; border: 1px solid oklch(0.78 0.14 55 / 0.4); display: grid; place-items: center; background: oklch(0.13 0.015 270 / 0.6); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-accent-primary); animation: bell-pulse 3.2s ease-in-out infinite; }
+    @keyframes bell-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 oklch(0.78 0.14 55 / 0.35); }
+      50%      { box-shadow: 0 0 0 14px oklch(0.78 0.14 55 / 0); }
+    }
+
+    @media (max-width: 900px) {
+      .hero { min-height: auto; padding-top: calc(var(--space-3xl) + var(--space-2xl)); }
+      .hero__container { grid-template-columns: 1fr; gap: var(--space-xl); }
+      .hero__visual { order: -1; max-width: 280px; }
+    }
+
+    /* FEATURE PAIR — outbound / inbound */
+    .pair { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-xl); }
+    .pair__card { background: var(--color-bg-surface); border: var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-xl); position: relative; }
+    .pair__card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--accent, var(--color-accent-primary)); border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+    .pair__card--in { --accent: var(--color-sage); }
+    .pair__card--out { --accent: var(--color-ember); }
+    .pair__tag { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--accent); text-transform: uppercase; letter-spacing: var(--letter-spacing-overline); margin-bottom: var(--space-sm); }
+    .pair__title { font-family: var(--font-heading); font-size: var(--text-2); font-weight: var(--font-weight-heading); line-height: var(--line-height-heading); color: var(--color-fg-base); margin-bottom: var(--space-md); }
+    .pair__body { color: var(--color-fg-muted); font-size: var(--text-base); line-height: var(--line-height-body); }
+    .pair__body p + p { margin-top: var(--space-sm); }
+    .pair__body code { font-family: var(--font-mono); font-size: 0.9em; color: var(--color-fg-base); background: var(--color-bg-elevated); padding: 0.1em 0.4em; border-radius: var(--radius-sm); }
+    @media (max-width: 720px) { .pair { grid-template-columns: 1fr; } }
+
+    /* ARCHITECTURE diagram */
+    .arch { background: var(--color-bg-surface); border: var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-2xl) var(--space-xl); }
+    .arch__diagram { display: grid; gap: var(--space-md); justify-items: center; font-family: var(--font-mono); font-size: var(--text-sm); }
+    .arch__row { display: flex; justify-content: center; gap: var(--space-md); flex-wrap: wrap; width: 100%; }
+    .arch__node { padding: var(--space-sm) var(--space-md); border: 1px solid oklch(1 0 0 / 0.12); border-radius: var(--radius-sm); background: var(--color-bg-elevated); color: var(--color-fg-base); white-space: nowrap; }
+    .arch__node--telegram { border-color: var(--color-sky); color: var(--color-sky); }
+    .arch__node--daemon { border-color: var(--color-ember); color: var(--color-ember); padding: var(--space-md) var(--space-xl); font-weight: var(--font-weight-semibold); }
+    .arch__node--session { border-color: var(--color-sage); color: var(--color-sage); }
+    .arch__node small { display: block; color: var(--color-fg-subtle); font-size: 0.7rem; margin-top: 2px; text-transform: uppercase; letter-spacing: var(--letter-spacing-overline); }
+    .arch__edge { color: var(--color-fg-subtle); font-size: var(--text-1); line-height: 1; user-select: none; }
+    .arch__fanout { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-md); width: 100%; max-width: 640px; }
+    .arch__caption { color: var(--color-fg-muted); font-size: var(--text-sm); text-align: center; margin-top: var(--space-lg); font-family: var(--font-mono); }
+    @media (max-width: 640px) {
+      .arch__fanout { grid-template-columns: 1fr; }
+      .arch__node { width: 100%; text-align: center; }
+    }
+
+    /* TRUST list */
+    .trust { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-lg); }
+    .trust__item { background: var(--color-bg-surface); border: var(--border-subtle); border-left: 2px solid var(--color-saffron); border-radius: var(--radius-md); padding: var(--space-lg); }
+    .trust__item h3 { font-family: var(--font-body); font-size: var(--text-base); font-weight: var(--font-weight-semibold); color: var(--color-fg-base); margin-bottom: var(--space-sm); }
+    .trust__item p { color: var(--color-fg-muted); font-size: var(--text-sm); line-height: 1.55; }
+    .trust__item code { font-family: var(--font-mono); font-size: 0.92em; color: var(--color-fg-base); }
+    @media (max-width: 900px) { .trust { grid-template-columns: 1fr; } }
+
+    /* QUICK START */
+    .steps { display: grid; gap: var(--space-lg); counter-reset: step; max-width: 56rem; }
+    .steps__item { display: grid; grid-template-columns: auto 1fr; gap: var(--space-lg); align-items: start; padding: var(--space-lg); background: var(--color-bg-surface); border: var(--border-subtle); border-radius: var(--radius-md); }
+    .steps__num { counter-increment: step; font-family: var(--font-heading); font-size: var(--text-3); font-weight: var(--font-weight-heading); color: var(--color-accent-primary); line-height: 1; }
+    .steps__num::before { content: counter(step, decimal-leading-zero); }
+    .steps__title { font-family: var(--font-body); font-size: var(--text-1); font-weight: var(--font-weight-semibold); color: var(--color-fg-base); margin-bottom: var(--space-xs); }
+    .steps__body { color: var(--color-fg-muted); font-size: var(--text-base); }
+    .steps__body code { font-family: var(--font-mono); font-size: 0.92em; color: var(--color-fg-base); background: var(--color-bg-elevated); padding: 0.1em 0.4em; border-radius: var(--radius-sm); }
+    .steps pre { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-fg-base); background: var(--color-bg-elevated); padding: var(--space-md); border-radius: var(--radius-sm); margin-top: var(--space-sm); overflow-x: auto; border: var(--border-subtle); }
+
+    /* FOOTER */
+    .footer { padding: var(--space-2xl) var(--grid-margin); border-top: var(--border-subtle); }
+    .footer__container { max-width: var(--grid-max-width); margin-inline: auto; display: flex; justify-content: space-between; gap: var(--space-md); flex-wrap: wrap; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-fg-subtle); }
+    .footer a { color: var(--color-fg-muted); text-decoration: underline; text-decoration-color: oklch(0.78 0.14 55 / 0.4); text-underline-offset: 3px; transition: color var(--duration-micro) var(--ease-standard); }
+    .footer a:hover, .footer a:focus-visible { color: var(--color-accent-primary); }
+  </style>
+</head>
+<body>
+
+  <a href="#main" class="skip-link">Skip to content</a>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="cursor-spotlight" aria-hidden="true"></div>
+
+  <div class="morphing-blobs" aria-hidden="true">
+    <svg viewBox="0 0 600 600" xmlns="http://www.w3.org/2000/svg">
+      <path class="morphing-blobs__blob--0" d="M300,150.18 C374.45,150.86 379.44,159.9 422.13,229.49 C464.82,299.08 478.93,314.86 442.29,382.15 C405.65,449.44 375.23,459.64 300,453.78 C224.77,447.92 229.32,430.6 191.51,362.63 C153.7,294.67 141.42,290.96 173.97,227.23 C206.52,163.5 225.55,149.5 300,150.18" transform="translate(-42, -79)"/>
+      <path class="morphing-blobs__blob--1" d="M300,150.5 C399.98,151.11 419.92,133.99 464.89,204.8 C509.86,275.61 499.36,316.38 449.89,386.54 C400.42,456.7 383.58,442.33 300,438.66 C216.42,434.99 221.8,445.08 171.28,374.32 C120.76,303.56 92.99,269.93 131.61,202.78 C170.23,135.63 200.02,149.89 300,150.5" transform="translate(-77, 29)"/>
+      <path class="morphing-blobs__blob--2" d="M300,87.68 C405.44,84.57 424.47,94.87 484.72,193.35 C544.97,291.83 556.24,334.33 500.82,415.94 C445.4,497.55 420.82,465.18 300,465.37 C179.18,465.56 148.12,495.06 98.09,416.57 C48.07,338.08 72.68,302.4 133.25,203.73 C193.82,105.06 194.56,90.79 300,87.68" transform="translate(11, 75)"/>
+    </svg>
+  </div>
+
+  <header class="nav">
+    <nav aria-label="Main navigation">
+      <a href="#" class="nav__logo" aria-label="harteWired home">
+        <img class="nav__rabbit" src="assets/whiterabbiticon2.png" alt="" width="36" height="36" aria-hidden="true">
+        harteWired
+      </a>
+      <ul class="nav__links">
+        <li><a href="#what" class="nav__link">What</a></li>
+        <li><a href="#architecture" class="nav__link">Architecture</a></li>
+        <li><a href="#trust" class="nav__link">Trust</a></li>
+        <li><a href="#start" class="nav__link">Quick start</a></li>
+        <li><a href="https://github.com/harteWired/belfry" class="nav__link" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main id="main">
+
+    <section class="hero" aria-labelledby="hero-heading">
+      <div class="hero__container">
+        <div class="hero__content">
+          <p class="hero__overline">harteWired Lab · belfry</p>
+          <h1 class="hero__headline" id="hero-heading">One bot.<br>Many <em>sessions</em>.</h1>
+          <p class="hero__subhead">Telegram-to-terminal MUX rigging for remote-driving multiple Claude Code projects. Status from N parallel sessions fans out to one Telegram feed; replies route back into the matching session as if you'd typed them at the prompt.</p>
+          <div class="hero__cta">
+            <a href="https://github.com/harteWired/belfry" class="btn btn--primary" target="_blank" rel="noopener noreferrer">View on GitHub <span aria-hidden="true">&rarr;</span></a>
+            <a href="#start" class="btn btn--ghost">Quick start</a>
+          </div>
+          <p class="hero__meta">
+            <span><strong>Phase 2</strong> shipped</span>
+            <span><strong>Node</strong> &ge; 20</span>
+            <span><strong>1 dep</strong> · chokidar</span>
+            <span><strong>Loopback</strong> only</span>
+          </p>
+        </div>
+        <div class="hero__visual" aria-hidden="true">
+          <svg class="hero__rings" viewBox="0 0 600 600" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="300" cy="300" r="60"  fill="none" stroke="oklch(0.78 0.14 55)"  stroke-width="1.4" opacity="0.20"/>
+            <circle cx="300" cy="300" r="120" fill="none" stroke="oklch(0.72 0.12 165)" stroke-width="1.3" opacity="0.16"/>
+            <circle cx="300" cy="300" r="180" fill="none" stroke="oklch(0.78 0.14 55)"  stroke-width="1.2" opacity="0.13"/>
+            <circle cx="300" cy="300" r="240" fill="none" stroke="oklch(0.72 0.12 165)" stroke-width="1.1" opacity="0.10"/>
+            <circle cx="300" cy="300" r="285" fill="none" stroke="oklch(0.78 0.14 55)"  stroke-width="1.0" opacity="0.08"/>
+          </svg>
+          <img class="hero__rabbit" src="assets/whiterabbiticon2.png" alt="" width="400" height="400" loading="eager">
+          <div class="hero__bell" title="ping">ping</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="what" aria-labelledby="what-heading">
+      <div class="section__container">
+        <header class="section__header reveal">
+          <p class="section__overline">Two flows, one daemon</p>
+          <h2 class="section__heading" id="what-heading">What belfry does</h2>
+          <p class="section__description">Anthropic's bundled <code>plugin:telegram</code> handles bidirectional chat for one specific session. belfry is the inverse: bidirectional, multi-terminal, per-slug whitelist. Install once, subscribe the projects you care about.</p>
+        </header>
+
+        <div class="pair">
+          <article class="pair__card pair__card--out reveal">
+            <p class="pair__tag">Outbound</p>
+            <h3 class="pair__title">Status fans into one feed</h3>
+            <div class="pair__body">
+              <p>A chokidar watcher reads <code>/tmp/claude-dashboard/&lt;slug&gt;.json</code> files. When a subscribed slug enters a state you care about (<code>ready</code>, <code>error</code>), it composes a 3-line message with the last user prompt + last Claude response and pushes it to your bot.</p>
+              <p>Per-slug throttle and coalesce keep fan-out bursts from spamming you. Optional Haiku summarizer turns long prompts into a lock-screen-friendly ping.</p>
+            </div>
+          </article>
+          <article class="pair__card pair__card--in reveal">
+            <p class="pair__tag">Inbound</p>
+            <h3 class="pair__title">Replies route back to the right terminal</h3>
+            <div class="pair__body">
+              <p>Each session runs a tiny <code>belfry-mcp</code> stdio plugin that registers with the daemon and long-polls for replies. When one arrives, it emits MCP <code>notifications/claude/channel</code> to inject the text into its parent Claude — same path your keyboard goes through.</p>
+              <p>Quote-reply is the primary route; <code>/&lt;slug&gt; message body</code> is the fallback. Anything from a chat ID other than yours is silently dropped.</p>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section--surface" id="architecture" aria-labelledby="arch-heading">
+      <div class="section__container">
+        <header class="section__header reveal">
+          <p class="section__overline">One process owns the bot</p>
+          <h2 class="section__heading" id="arch-heading">Architecture</h2>
+          <p class="section__description">A daemon owns the Telegram connection and the registry. Each session attaches over loopback HTTP. No multiplexer, no keystroke injection &mdash; the local terminal stays sovereign.</p>
+        </header>
+
+        <div class="arch reveal">
+          <div class="arch__diagram" role="img" aria-label="belfry architecture: Telegram bot connects to one daemon, which fans inbound replies to N session MCP plugins over loopback HTTP">
+            <div class="arch__row"><span class="arch__node arch__node--telegram">Telegram &middot; one bot, one chat</span></div>
+            <div class="arch__edge" aria-hidden="true">&updownarrow;</div>
+            <div class="arch__row"><span class="arch__node arch__node--daemon">belfry-daemon<small>bin/belfry.js</small></span></div>
+            <div class="arch__row" aria-hidden="true">
+              <span class="arch__edge">&darr;</span>
+              <span class="arch__edge" style="opacity:0;">&middot;</span>
+              <span class="arch__edge">&darr;</span>
+            </div>
+            <div class="arch__row">
+              <span class="arch__node">outbound watcher</span>
+              <span class="arch__node">HTTP loopback registry</span>
+            </div>
+            <div class="arch__edge" aria-hidden="true">&darr;</div>
+            <div class="arch__fanout">
+              <span class="arch__node arch__node--session">session A<small>belfry-mcp</small></span>
+              <span class="arch__node arch__node--session">session B<small>belfry-mcp</small></span>
+              <span class="arch__node arch__node--session">session C<small>belfry-mcp</small></span>
+            </div>
+          </div>
+          <p class="arch__caption">Daemon binds <code>127.0.0.1:49876</code>. Plugins authenticate with a 32-byte bearer token at <code>~/.local/state/belfry/registry.token</code> (mode 0600).</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="trust" aria-labelledby="trust-heading">
+      <div class="section__container">
+        <header class="section__header reveal">
+          <p class="section__overline">Read this first</p>
+          <h2 class="section__heading" id="trust-heading">Trust model</h2>
+          <p class="section__description">Belfry's threat model is short, but the consequences are sharp. Your bot token + chat ID together are equivalent to a shell credential.</p>
+        </header>
+
+        <div class="trust">
+          <div class="trust__item reveal">
+            <h3>Token = shell credential</h3>
+            <p>Inbound messages from your chat ID are injected into the matching session as user input &mdash; same path your keyboard goes through. Treat <code>BELFRY_TOKEN</code> like an SSH key, not a webhook URL.</p>
+          </div>
+          <div class="trust__item reveal">
+            <h3>One chat, one user</h3>
+            <p>Inbound from any chat ID other than <code>BELFRY_CHAT_ID</code> is silently dropped. Don't add the bot to a group whose chat ID could collide; don't expand the allowlist without thinking through who that gives shell-equivalent access to.</p>
+          </div>
+          <div class="trust__item reveal">
+            <h3>Loopback only</h3>
+            <p>The registry binds <code>127.0.0.1</code> and gates every endpoint on a 32-byte bearer token. Other UIDs on the host can't register fake slugs or call <code>/send</code>. Don't change the binding to <code>0.0.0.0</code> &mdash; the trust model assumes loopback.</p>
+          </div>
+          <div class="trust__item reveal">
+            <h3>Rotate on suspicion</h3>
+            <p>If a token leaks, message <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">@BotFather</a> &rarr; <code>/revoke</code>. The old token is dead instantly at the API edge. Update your launcher's secret store and restart belfry.</p>
+          </div>
+          <div class="trust__item reveal">
+            <h3>Tight tmp perms</h3>
+            <p><code>/tmp/claude-dashboard/</code> should be 0700 with files 0600. The daemon warns at startup if it finds wider modes &mdash; <code>chmod 700</code> to tighten. Otherwise prompt and response text in <code>last_response</code> is readable by other UIDs.</p>
+          </div>
+          <div class="trust__item reveal">
+            <h3>Summarizer leaves the host</h3>
+            <p>If <code>ANTHROPIC_API_KEY</code> is set, the optional Haiku summarizer sends prompts and responses to <code>api.anthropic.com</code>. The no-key fallback is a hard truncate that never leaves the machine. Opt-in per slug.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section section--surface" id="start" aria-labelledby="start-heading">
+      <div class="section__container">
+        <header class="section__header reveal">
+          <p class="section__overline">Five minutes, six commands</p>
+          <h2 class="section__heading" id="start-heading">Quick start</h2>
+          <p class="section__description">Single-user, single-platform (Telegram), single-host (loopback). No SDK; only runtime dep is <code>chokidar</code>.</p>
+        </header>
+
+        <ol class="steps">
+          <li class="steps__item reveal">
+            <div class="steps__num" aria-hidden="true"></div>
+            <div>
+              <h3 class="steps__title">Create a bot</h3>
+              <p class="steps__body">Message <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">@BotFather</a> &rarr; <code>/newbot</code>. Save the token.</p>
+            </div>
+          </li>
+          <li class="steps__item reveal">
+            <div class="steps__num" aria-hidden="true"></div>
+            <div>
+              <h3 class="steps__title">Get your chat ID</h3>
+              <p class="steps__body">Send the bot any message, then call <code>getUpdates</code> and copy <code>message.chat.id</code>.</p>
+              <pre>curl https://api.telegram.org/bot&lt;TOKEN&gt;/getUpdates</pre>
+            </div>
+          </li>
+          <li class="steps__item reveal">
+            <div class="steps__num" aria-hidden="true"></div>
+            <div>
+              <h3 class="steps__title">Configure subscriptions</h3>
+              <p class="steps__body">Copy <code>docs/belfry.jsonc.example</code> to <code>~/.claude/belfry.jsonc</code> and edit the whitelist of slugs.</p>
+            </div>
+          </li>
+          <li class="steps__item reveal">
+            <div class="steps__num" aria-hidden="true"></div>
+            <div>
+              <h3 class="steps__title">Run the daemon</h3>
+              <p class="steps__body">Pass credentials via env. Belfry never reads tokens from disk.</p>
+              <pre>BELFRY_TOKEN=&lt;token&gt; BELFRY_CHAT_ID=&lt;chat-id&gt; node bin/belfry.js</pre>
+            </div>
+          </li>
+          <li class="steps__item reveal">
+            <div class="steps__num" aria-hidden="true"></div>
+            <div>
+              <h3 class="steps__title">Wire each session for inbound</h3>
+              <p class="steps__body">Add <code>belfry-mcp</code> to the projects you want to drive &mdash; drop a <code>.mcp.json</code> at the project root pointing at <code>bin/belfry-mcp.js</code> and restart the Claude Code session. See <a href="https://github.com/harteWired/belfry/blob/main/docs/install-mcp.md" target="_blank" rel="noopener noreferrer">docs/install-mcp.md</a>.</p>
+            </div>
+          </li>
+          <li class="steps__item reveal">
+            <div class="steps__num" aria-hidden="true"></div>
+            <div>
+              <h3 class="steps__title">(Optional) install the status hook</h3>
+              <p class="steps__body">For status JSONs without claudelike-bar, run <code>belfry-install-hook</code> from each project root. It adds <code>belfry-hook</code> to the project's <code>.claude/settings.json</code> and skips if it detects another writer of the convention.</p>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="footer">
+    <div class="footer__container">
+      <p>Built by <a href="https://github.com/harteWired" target="_blank" rel="noopener noreferrer">harteWired</a> &times; Claude Code</p>
+      <p><a href="https://github.com/harteWired/belfry" target="_blank" rel="noopener noreferrer">Source</a> &middot; <a href="https://lab.mattharte.com/" target="_blank" rel="noopener noreferrer">More from the lab</a></p>
+    </div>
+  </footer>
+
+  <script>
+    document.documentElement.classList.add('js');
+    // Cursor spotlight follow
+    (function() {
+      var spot = document.querySelector('.cursor-spotlight');
+      if (!spot) return;
+      var raf = null, x = 0, y = 0;
+      function paint() { spot.style.transform = 'translate(' + x + 'px, ' + y + 'px) translate(-50%, -50%)'; raf = null; }
+      window.addEventListener('pointermove', function(e) { x = e.clientX; y = e.clientY; if (!raf) raf = requestAnimationFrame(paint); }, { passive: true });
+    })();
+
+    // Nav scroll backdrop
+    (function() {
+      var nav = document.querySelector('.nav');
+      if (!nav) return;
+      function update() { nav.classList.toggle('nav--scrolled', window.scrollY > 24); }
+      update();
+      window.addEventListener('scroll', update, { passive: true });
+    })();
+
+    // Reveal on scroll
+    (function() {
+      var els = document.querySelectorAll('.reveal');
+      if (!els.length || !('IntersectionObserver' in window)) {
+        els.forEach(function(el) { el.classList.add('is-visible'); });
+        return;
+      }
+      var io = new IntersectionObserver(function(entries) {
+        entries.forEach(function(e) { if (e.isIntersecting) { e.target.classList.add('is-visible'); io.unobserve(e.target); } });
+      }, { rootMargin: '0px 0px -10% 0px', threshold: 0.05 });
+      els.forEach(function(el) { io.observe(el); });
+    })();
+  </script>
+
+</body>
+</html>

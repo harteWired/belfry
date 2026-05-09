@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- Reduced rabbit silhouette — two upright ears + round head.
+       Solid dark fill so it reads at favicon scale. -->
+  <g fill="#1a1a1a">
+    <!-- Left ear -->
+    <ellipse cx="11" cy="8" rx="2.4" ry="6.4"/>
+    <!-- Right ear -->
+    <ellipse cx="21" cy="8" rx="2.4" ry="6.4"/>
+    <!-- Head -->
+    <ellipse cx="16" cy="21" rx="8.6" ry="7.6"/>
+  </g>
+  <!-- Inner ear blush -->
+  <ellipse cx="11" cy="9" rx="0.9" ry="3.4" fill="#f4d2d8"/>
+  <ellipse cx="21" cy="9" rx="0.9" ry="3.4" fill="#f4d2d8"/>
+  <!-- Eyes -->
+  <circle cx="13" cy="20" r="1" fill="#fafaf8"/>
+  <circle cx="19" cy="20" r="1" fill="#fafaf8"/>
+  <!-- Nose -->
+  <circle cx="16" cy="23.5" r="0.9" fill="#f4a8b5"/>
+</svg>

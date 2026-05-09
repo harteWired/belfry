@@ -48,20 +48,52 @@ belfry is the inverse: outbound-only at first, then bidirectional, multi-termina
 
 ## Architecture (one diagram)
 
-```
-                  Telegram (one bot, one chat)
-                            ↕
-                  belfry-daemon (bin/belfry.js)
-                  ↑           ↓
-       outbound watcher   HTTP loopback registry
-                            ↓
-        ┌───────────────────┼───────────────────┐
-        ↓                   ↓                   ↓
-    session A           session B           session C
-   [belfry-mcp]        [belfry-mcp]        [belfry-mcp]
+```mermaid
+---
+title: belfry — one bot, N sessions
+---
+flowchart TD
+    TG[Telegram<br/>one bot · one chat]
+    Daemon[belfry-daemon<br/>bin/belfry.js]
+    Watcher[chokidar watcher<br/>/tmp/claude-dashboard/]
+    Reg[loopback HTTP registry<br/>127.0.0.1:49876]
+    A[session A<br/>belfry-mcp]
+    B[session B<br/>belfry-mcp]
+    C[session C<br/>belfry-mcp]
+
+    TG <--> Daemon
+    Watcher --> Daemon
+    Daemon --> Reg
+    Reg --> A
+    Reg --> B
+    Reg --> C
 ```
 
 **Two processes.** The daemon owns the bot, polls Telegram, and runs the chokidar watcher → composer chain for outbound. Each session you want bidirectional runs a tiny `belfry-mcp` stdio plugin that registers with the daemon and long-polls for replies. When a reply arrives, the plugin emits MCP `notifications/claude/channel` to inject the text into its parent claude — the same mechanism the bundled `plugin:telegram` uses for one-session bidirectional, generalized to N sessions sharing one bot.
+
+## Project structure
+
+```
+belfry/
+├── bin/                       # entry points
+│   ├── belfry.js              # the daemon
+│   ├── belfry-mcp.js          # per-session MCP plugin
+│   ├── belfry-hook.js         # Stop-hook that writes /tmp/claude-dashboard/<slug>.json
+│   └── belfry-install-hook.js # idempotent installer for the hook
+├── lib/                       # daemon internals
+│   ├── watcher.js             # chokidar → composer
+│   ├── composer.js            # 3-line message builder
+│   ├── poller.js              # Telegram getUpdates loop
+│   ├── router.js              # inbound dispatch (chat-ID gate, slug routing)
+│   ├── registry.js            # loopback HTTP registry + bearer-token auth
+│   ├── summarizer.js          # optional Haiku summarizer (opt-in per slug)
+│   └── …                      # throttle, digest, nicknames, reply tracker
+├── docs/
+│   ├── CONVENTION.md          # /tmp/claude-dashboard/ contract
+│   ├── install-mcp.md         # per-project MCP plugin install
+│   └── belfry.jsonc.example   # subscription whitelist example
+└── test/                      # node:test, real temp dirs, no mocks of fs
+```
 
 ## Trust model
 
@@ -103,3 +135,17 @@ npm test
 ```
 
 Pure ESM, Node ≥ 20. Only runtime dep is `chokidar`. Telegram client is native `fetch`; MCP plugin is hand-rolled JSON-RPC over stdio; registry is hand-rolled HTTP over `node:http`. No SDK required.
+
+## Documentation
+
+| Doc | What's in it |
+|:---|:---|
+| [`docs/CONVENTION.md`](docs/CONVENTION.md) | The `/tmp/claude-dashboard/<slug>.json` contract — what shape the file takes, what writes to it, how multiple writers coordinate |
+| [`docs/install-mcp.md`](docs/install-mcp.md) | Wiring `belfry-mcp` into a project's `.mcp.json` so a Claude Code session can take inbound replies |
+| [`docs/belfry.jsonc.example`](docs/belfry.jsonc.example) | Annotated subscription whitelist — copy to `~/.claude/belfry.jsonc` and edit |
+| [`docs/clb-compat-issue.md`](docs/clb-compat-issue.md) | Notes on co-existing with claudelike-bar's writer of the same convention |
+| [`docs/feature-ideas/`](docs/feature-ideas/) | Sketches for Phase 3+ work that haven't earned a spec yet |
+
+## License
+
+Not yet open-sourced — `package.json` is `UNLICENSED` while the trust model and the bot-token threat surface are still settling. Source is public for auditability; redistribution / forks aren't granted yet. A permissive license (MIT or Apache-2.0) will land once the design has stabilised.

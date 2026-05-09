@@ -273,3 +273,91 @@ test('pending reply marker has TTL and is cleared by clearOwesReply', () => {
   registry.clearOwesReply('ttl-slug');
   assert.equal(registry.getOwesReply('ttl-slug'), null);
 });
+
+test('brain endpoints dispatch to wired handlers, JSON in/out', async () => {
+  const calls = [];
+  const brainHandlers = {
+    listSessions: () => [{ slug: 'a' }, { slug: 'b' }],
+    getSession: ({ slug }) => { calls.push({ fn: 'getSession', slug }); return { status: 'ready', slug }; },
+    deliver: (args) => { calls.push({ fn: 'deliver', args }); return { fanout: 1 }; },
+  };
+  const reg = new Registry({ port: 0, recvTimeoutMs: 200, brainHandlers });
+  await reg.start();
+  try {
+    const url = `http://127.0.0.1:${reg.port}`;
+    // GET endpoint, no body
+    const r1 = await fetch(`${url}/brain/list-sessions`);
+    assert.equal(r1.status, 200);
+    assert.deepEqual(await r1.json(), [{ slug: 'a' }, { slug: 'b' }]);
+    // POST endpoint with body
+    const r2 = await fetch(`${url}/brain/get-session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ slug: 'belfry' }),
+    });
+    assert.equal(r2.status, 200);
+    assert.deepEqual(await r2.json(), { status: 'ready', slug: 'belfry' });
+    // Action endpoint
+    const r3 = await fetch(`${url}/brain/deliver`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ slug: 'belfry', body: 'hello' }),
+    });
+    assert.equal(r3.status, 200);
+    // Verify dispatch order
+    assert.equal(calls[0].fn, 'getSession');
+    assert.equal(calls[1].fn, 'deliver');
+  } finally {
+    await reg.stop();
+  }
+});
+
+test('brain endpoint with no handlers returns 503', async () => {
+  // Default `registry` fixture has no brainHandlers.
+  const r = await fetch(`${baseUrl}/brain/list-sessions`);
+  assert.equal(r.status, 503);
+});
+
+test('brain endpoint method-mismatch returns 405', async () => {
+  const reg = new Registry({ port: 0, brainHandlers: { listSessions: () => [] } });
+  await reg.start();
+  try {
+    // /brain/list-sessions is GET; POST should 405.
+    const r = await fetch(`http://127.0.0.1:${reg.port}/brain/list-sessions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    assert.equal(r.status, 405);
+  } finally {
+    await reg.stop();
+  }
+});
+
+test('brain endpoint that throws returns 400 with the error message', async () => {
+  const reg = new Registry({
+    port: 0,
+    brainHandlers: {
+      getSession: () => { throw new Error('slug required'); },
+    },
+  });
+  await reg.start();
+  try {
+    const r = await fetch(`http://127.0.0.1:${reg.port}/brain/get-session`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    assert.equal(r.status, 400);
+    assert.equal(await r.text(), 'slug required');
+  } finally {
+    await reg.stop();
+  }
+});
+
+test('unknown brain endpoint returns 404', async () => {
+  const reg = new Registry({ port: 0, brainHandlers: { listSessions: () => [] } });
+  await reg.start();
+  try {
+    const r = await fetch(`http://127.0.0.1:${reg.port}/brain/mystery`);
+    assert.equal(r.status, 404);
+  } finally {
+    await reg.stop();
+  }
+});

@@ -184,6 +184,25 @@ test('prefix path: unknown token (neither slug nor nickname) → unmatched', () 
   assert.deepEqual(r, { action: 'unmatched', text: '/totally-unknown body', messageId: 99 });
 });
 
+test('reserved tokens never deliver via prefix path even if a slug literally matches', () => {
+  // A session named exactly the reserved token exists. Malformed reserved
+  // commands that don't match the strict reserved-command regex must not
+  // fall through and deliver to a hypothetical session of the same name.
+  // Inputs chosen to *not* match NICK_SET_RE / UNNICK_RE / NICKS_LIST_RE /
+  // STATUS_RE — i.e. extra/invalid args.
+  const malformed = [
+    { text: '/nick body content', knownSlugs: ['nick'] }, // nickname & slug shape clash; well-formed-looking but the slug body has spaces
+    { text: '/unnick foo extra', knownSlugs: ['unnick'] }, // /unnick takes one arg only
+    { text: '/nicks junk here', knownSlugs: ['nicks'] }, // /nicks takes no args
+    { text: '/status one two three', knownSlugs: ['status'] }, // /status takes one arg max
+  ];
+  for (const { text, knownSlugs } of malformed) {
+    const r = route({ update: update({ text }), ...ctx({ knownSlugs }) });
+    // Must not be a 'deliver' to the reserved-named slug.
+    assert.notEqual(r?.action, 'deliver', `${text} must not deliver to /${knownSlugs[0]}`);
+  }
+});
+
 test('backwards compat: knownSlugs Set still works without hasSlug', () => {
   const replyTracker = new ReplyTracker();
   const r = route({

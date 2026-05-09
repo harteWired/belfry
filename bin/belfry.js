@@ -121,13 +121,13 @@ async function main() {
   const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound });
   await registry.start();
 
-  // Watcher is created later but we need its getActiveSlugs accessor to
-  // validate `/nick`. Forward-declare the holder; nicknames closes over it
-  // and reads through whichever watcher is wired in by the time set() runs.
-  let watcherRef = null;
+  // Watcher is created later (after we know the digest flush + onUpdate
+  // callbacks), but the nickname registry and agent handler both need to
+  // call into it. Single forward-declared holder both close over.
+  let watcher = null;
   const nicknames = new NicknameRegistry({
     persistPath: join(stateDir, 'nicknames.json'),
-    getActiveSlugs: () => (watcherRef ? watcherRef.getActiveSlugs() : new Set()),
+    getActiveSlugs: () => (watcher ? watcher.getActiveSlugs() : new Set()),
     log,
   });
   nicknames.load();
@@ -178,13 +178,25 @@ async function main() {
 
   // Conversational agent (#13). Activates only when ANTHROPIC_API_KEY is
   // set; otherwise the handler still runs but classify() returns a decline
-  // immediately. Forward-declared so it can read watcherRef like nicknames does.
-  let watcherForAgent = null;
+  // immediately. getActiveSlugs uses the in-memory cache (no readdir on
+  // every Telegram message); the cold-path /nick validation in
+  // NicknameRegistry uses the readdir variant directly via watcher.getActiveSlugs.
   const agentHandler = makeAgentHandler({
     apiKey: anthropicApiKey,
     nicknames,
     recentMessages,
-    watcher: { get statusDir() { return watcherForAgent?.statusDir; }, getActiveSlugs: () => (watcherForAgent ? watcherForAgent.getActiveSlugs() : new Set()) },
+    getActiveSlugs: () => (watcher ? watcher.getActiveSlugsFromCache() : new Set()),
+    statusDir: undefined, // resolved by readStatus closure below
+    readStatus: (slug, activeSlugSet) => {
+      if (!activeSlugSet.has(slug)) return { error: `no active session named '${slug}'` };
+      try {
+        const file = join(watcher.statusDir, `${slug}.json`);
+        const raw = readFileSync(file, 'utf8');
+        return JSON.parse(raw);
+      } catch (err) {
+        return { error: err.message };
+      }
+    },
     send: ({ text, replyToMessageId }) =>
       sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
     deliver: (slug, text, messageId) => registry.deliver(slug, text, messageId),
@@ -257,6 +269,7 @@ async function main() {
     summarizeBatchFn: anthropicApiKey ? maybeSummarizeBatch : null,
     send: ({ text }) => sendMessage({ botToken, chatId, text, forumTopicId }),
     recordReply: (msgId, slug) => replyTracker.record(msgId, slug),
+    recordRecent: (slug, entry) => recentMessages.push(slug, entry),
     log,
   });
   const digest = new Digest({
@@ -265,7 +278,7 @@ async function main() {
     flush: digestFlush,
   });
 
-  const watcher = new StatusWatcher({
+  watcher = new StatusWatcher({
     onUpdate: ({ slug, statusFile, prevStatusFile }) => {
       const newStatus = statusFile?.status;
       const prevStatus = prevStatusFile?.status;
@@ -297,8 +310,6 @@ async function main() {
     log,
   });
   watcher.start();
-  watcherRef = watcher;
-  watcherForAgent = watcher;
   log('belfry up');
 
   const shutdown = async (signal) => {

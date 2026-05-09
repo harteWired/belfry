@@ -5,13 +5,6 @@ import { makeAgentHandler } from '../lib/agent-handler.js';
 import { NicknameRegistry } from '../lib/nicknames.js';
 import { RecentMessages } from '../lib/recent-messages.js';
 
-function fakeWatcher({ activeSlugs = [], statusDir = '/nowhere' } = {}) {
-  return {
-    statusDir,
-    getActiveSlugs: () => new Set(activeSlugs),
-  };
-}
-
 function fakeSender() {
   const calls = [];
   const fn = async (args) => {
@@ -36,7 +29,9 @@ const baseDeps = (overrides = {}) => ({
   apiKey: 'sk',
   nicknames: new NicknameRegistry({ getActiveSlugs: () => new Set(['belfry']) }),
   recentMessages: new RecentMessages(),
-  watcher: fakeWatcher({ activeSlugs: ['belfry'] }),
+  getActiveSlugs: () => new Set(['belfry']),
+  statusDir: '/nowhere',
+  readStatus: () => ({ error: 'stubbed' }),
   send: fakeSender(),
   deliver: fakeDeliver(),
   recordReply: () => {},
@@ -85,7 +80,7 @@ test('route intent: rejects when target_slug is no longer active', async () => {
   const send = fakeSender();
   const deliver = fakeDeliver();
   const h = makeAgentHandler({
-    ...baseDeps({ watcher: fakeWatcher({ activeSlugs: ['belfry'] }) }),
+    ...baseDeps({ getActiveSlugs: () => new Set(['belfry']) }),
     send,
     deliver,
     classifyFn: async () => ({ intent: 'route', target_slug: 'gone', body: 'x', confidence: 0.99 }),
@@ -154,12 +149,31 @@ test('empty / whitespace text: handler is a no-op', async () => {
   assert.equal(send.calls.length, 0);
 });
 
+test('readStatus: invoked with slug and active set; can stub fs entirely', async () => {
+  const seen = [];
+  const h = makeAgentHandler({
+    ...baseDeps({
+      readStatus: (slug, activeSet) => {
+        seen.push({ slug, present: activeSet.has(slug) });
+        return { status: 'ready', slug };
+      },
+    }),
+    classifyFn: async (args) => {
+      // Simulate the model calling get_session.
+      args.tools.get_session({ slug: 'belfry' });
+      return { intent: 'decline', message: 'k' };
+    },
+  });
+  await h({ text: 'how is belfry', messageId: 900 });
+  assert.deepEqual(seen, [{ slug: 'belfry', present: true }]);
+});
+
 test('classifyFn receives active slugs and nickname map', async () => {
   let captured = null;
   const nicknames = new NicknameRegistry({ getActiveSlugs: () => new Set(['belfry']) });
   nicknames.set('b', 'belfry');
   const h = makeAgentHandler({
-    ...baseDeps({ nicknames, watcher: fakeWatcher({ activeSlugs: ['belfry'] }) }),
+    ...baseDeps({ nicknames, getActiveSlugs: () => new Set(['belfry']) }),
     classifyFn: async (args) => {
       captured = args;
       return { intent: 'decline', message: 'k' };

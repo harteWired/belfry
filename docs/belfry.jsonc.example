@@ -40,8 +40,11 @@
   "coalesceMs": 5000,
 
   // Truncation caps for the prompt + response in each message (chars).
-  "promptCap": 200,
-  "responseCap": 400,
+  // Telegram's per-message cap is 4096; the composer wraps the prompt in
+  // an expandable blockquote so it doesn't crowd the screen — so keeping
+  // these large preserves content without making messages feel attenuated.
+  "promptCap": 1500,
+  "responseCap": 2500,
 
   // Rollup-digest mode (per-slug opt-in via "digest": true on a subscription).
   // When digest mode is on, events for that slug bypass the per-event throttle

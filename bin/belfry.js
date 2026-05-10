@@ -352,6 +352,7 @@ async function main() {
       try {
         const result = await sendMessage({
           botToken, chatId, text, forumTopicId: topicForSlug(slug), replyMarkup,
+          parseMode: 'HTML',
         });
         if (result?.message_id) {
           replyTracker.record(result.message_id, slug);
@@ -374,7 +375,7 @@ async function main() {
     promptCap: config.promptCap,
     responseCap: config.responseCap,
     summarizeBatchFn: maybeSummarizeBatch,
-    send: ({ slug, text }) => sendMessage({ botToken, chatId, text, forumTopicId: topicForSlug(slug) }),
+    send: ({ slug, text }) => sendMessage({ botToken, chatId, text, forumTopicId: topicForSlug(slug), parseMode: 'HTML' }),
     recordReply: (msgId, slug) => replyTracker.record(msgId, slug),
     recordRecent: (slug, entry) => recentMessages.push(slug, entry),
     log,

@@ -64,7 +64,11 @@ function loadToken() {
     return null;
   }
 }
-const authToken = loadToken();
+// `let` (not const) so 401 paths can hot-swap on token rotation. Earlier code
+// exited the process and relied on Claude Code to respawn us — empirically
+// the MCP host does NOT respawn stdio servers on a clean exit (verified
+// 2026-05-10), so we heal in-place instead.
+let authToken = loadToken();
 
 function authHeaders() {
   return authToken ? { authorization: `Bearer ${authToken}` } : {};
@@ -220,6 +224,22 @@ async function register() {
       headers: { 'content-type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ instance_id: instanceId, slug, cwd, pid: process.pid }),
     });
+    if (res.status === 401) {
+      // Common case: the MCP started before the daemon, loadToken() returned
+      // null at module init, and now the daemon is up with auth enabled — our
+      // header-less /register is being refused. Re-read the token file; if it
+      // has appeared (or rotated), hot-swap the cached value and retry.
+      const fresh = loadToken();
+      if (fresh && fresh !== authToken) {
+        authToken = fresh;
+        log('register: token reloaded from disk — retrying');
+        scheduleRetry(register);
+        return;
+      }
+      log('register failed: HTTP 401');
+      scheduleRetry(register);
+      return;
+    }
     if (!res.ok) {
       log(`register failed: HTTP ${res.status}`);
       scheduleRetry(register);
@@ -270,18 +290,16 @@ async function recvLoop() {
       continue;
     }
     if (res.status === 401) {
-      log('daemon rejected auth — token may have rotated; re-reading');
-      // Best-effort: re-read the token file. If different, the daemon
-      // re-keyed; we can't hot-swap our cached header, so exit cleanly so
-      // Claude Code respawns us as a fresh process and we'll read the new
-      // token at startup. If it's the same, the daemon has us blocked for
-      // some other reason (e.g. our register went through but the daemon
-      // restarted) — back off and let the recv loop retry.
+      // Token may have rotated on the daemon side. Re-read the file; if it
+      // differs from our cached value, hot-swap and retry. We can't rely on
+      // a clean process exit triggering a respawn — empirically the MCP host
+      // does not restart stdio servers on exit (verified 2026-05-10).
       const fresh = loadToken();
       if (fresh && fresh !== authToken) {
-        log('token changed on disk — exiting for respawn');
-        await shutdown('token-rotated'); // calls process.exit(0); does not return
-        return;
+        authToken = fresh;
+        log('daemon rejected auth — token reloaded from disk');
+      } else {
+        log('daemon rejected auth — token unchanged, backing off');
       }
       await sleep(RECONNECT_BACKOFF_MS);
       continue;

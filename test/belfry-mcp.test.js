@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { Registry } from '../lib/registry.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -230,6 +232,64 @@ test('reply tool POSTs to daemon /send and reports the message_id', async () => 
     setTimeout(() => child.kill('SIGTERM'), 1000).unref();
   });
   await reg.stop();
+});
+
+test('plugin hot-swaps token on register 401 and registers in-place', async () => {
+  // Reproduces the post-rebuild bug: MCP started before the daemon, so
+  // loadToken() at module init returned null. Once the daemon comes up with
+  // an auth token, /register returns 401. The fix re-reads the token on 401,
+  // hot-swaps the cached value, and retries — without exiting — because the
+  // MCP host does not respawn stdio servers on clean exit (verified
+  // 2026-05-10 against this Claude Code build).
+  const reg = new Registry({ port: 0, recvTimeoutMs: 200, authToken: 'real-token' });
+  await reg.start();
+  const stateDir = await mkdtemp(join(tmpdir(), 'belfry-mcp-test-'));
+  try {
+    const child = spawn('node', [PLUGIN_PATH], {
+      cwd: '/tmp',
+      env: {
+        ...process.env,
+        BELFRY_MCP_BASE: `http://127.0.0.1:${reg.port}`,
+        BELFRY_STATE_DIR: stateDir,
+        CLAUDELIKE_BAR_NAME: 'rotated',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (c) => { stderr += c; });
+    child.stdout.resume();
+
+    const send = (msg) => child.stdin.write(JSON.stringify(msg) + '\n');
+    send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } });
+    send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+
+    // Give the first register a moment to fail with 401 against an empty
+    // token file. Then drop the matching token in place.
+    await new Promise((r) => setTimeout(r, 300));
+    await writeFile(join(stateDir, 'registry.token'), 'real-token', { mode: 0o600 });
+
+    // Wait for the plugin to register (RECONNECT_BACKOFF_MS=2s).
+    const start = Date.now();
+    while (Date.now() - start < 6000) {
+      if (reg.bySlug.has('rotated')) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok(reg.bySlug.has('rotated'), `plugin should have registered after token swap; stderr:\n${stderr}`);
+    assert.match(stderr, /token reloaded from disk/);
+    // Plugin should still be alive — no exit-for-respawn.
+    assert.equal(child.exitCode, null);
+
+    child.stdin.end();
+    await new Promise((resolve) => {
+      if (child.exitCode !== null) return resolve();
+      child.on('exit', resolve);
+      setTimeout(() => child.kill('SIGTERM'), 1000).unref();
+    });
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+    await reg.stop();
+  }
 });
 
 test('plugin unregisters cleanly on stdin close', async () => {

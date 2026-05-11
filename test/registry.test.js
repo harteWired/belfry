@@ -258,11 +258,17 @@ test('/send rejects empty text and oversized text', async () => {
     body: JSON.stringify({ instance_id: 'lim', text: '' }),
   });
   assert.equal(empty.status, 400);
+  // MAX_SEND_TEXT_LEN is now 64 KiB (raised from 4096 once the daemon
+  // started packing oversized replies). The 413 still guards against a
+  // runaway payload — use something well past the new ceiling.
   const big = await fetch(`${url}/send`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ instance_id: 'lim', text: 'x'.repeat(5000) }),
+    body: JSON.stringify({ instance_id: 'lim', text: 'x'.repeat(70 * 1024) }),
   });
+  // The per-request body cap (80 KiB) sits above the text cap, so 70 KiB
+  // of payload makes it through the body read and trips the explicit
+  // length check inside handleSend — 413 either way.
   assert.equal(big.status, 413);
   await reg.stop();
 });

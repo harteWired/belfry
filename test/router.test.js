@@ -410,6 +410,59 @@ test('/help with unknown topic falls through to action=help with topic preserved
   assert.deepEqual(r, { action: 'help', topic: 'mystery', messageId: 99 });
 });
 
+test('quote-reply with "full" + stash → full-expand action', () => {
+  const r = route({
+    update: update({ text: 'full', replyToId: 42 }),
+    ...ctx({ tracked: [[42, 'belfry']] }),
+    hasFullStash: (id) => id === 42,
+  });
+  assert.deepEqual(r, { action: 'full-expand', targetMessageId: 42, messageId: 99 });
+});
+
+test('"full" case-insensitive, slash-optional, whitespace-tolerant', () => {
+  const variations = ['full', 'FULL', 'Full', ' full ', '/full'];
+  for (const text of variations) {
+    const r = route({
+      update: update({ text, replyToId: 7 }),
+      ...ctx({ tracked: [[7, 'belfry']] }),
+      hasFullStash: (id) => id === 7,
+    });
+    assert.equal(r.action, 'full-expand', `text=${JSON.stringify(text)} should trigger full-expand`);
+  }
+});
+
+test('quote-reply with "full" but no stash → falls through to deliver', () => {
+  // Stash expired or never existed; the body should land in the session
+  // like any other quote-reply so the user isn't silently dropped.
+  const r = route({
+    update: update({ text: 'full', replyToId: 42 }),
+    ...ctx({ tracked: [[42, 'belfry']] }),
+    hasFullStash: () => false,
+  });
+  assert.deepEqual(r, { action: 'deliver', slug: 'belfry', text: 'full', messageId: 99 });
+});
+
+test('"full" without quote-reply → unmatched (no implicit slug)', () => {
+  // Without a reply_to, we don't know which stash to expand. Drop to the
+  // conversational agent rather than guessing.
+  const r = route({
+    update: update({ text: 'full' }),
+    ...ctx(),
+    hasFullStash: () => true,
+  });
+  assert.equal(r.action, 'unmatched');
+});
+
+test('"full me" (extra word) is NOT a full-expand trigger', () => {
+  const r = route({
+    update: update({ text: 'full me', replyToId: 42 }),
+    ...ctx({ tracked: [[42, 'belfry']] }),
+    hasFullStash: () => true,
+  });
+  // Should route to deliver, not full-expand.
+  assert.equal(r.action, 'deliver');
+});
+
 test('backwards compat: knownSlugs Set still works without hasSlug', () => {
   const replyTracker = new ReplyTracker();
   const r = route({

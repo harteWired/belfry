@@ -162,13 +162,6 @@ function handleMessage(msg) {
   }
 }
 
-// Telegram's hard cap on message text. Longer payloads are rejected outright
-// by the Bot API. We truncate locally rather than chunk into multiple sends —
-// chunking would produce N notification buzzes on the user's phone for one
-// logical reply, which is louder than the truncation suffix.
-const TELEGRAM_TEXT_CAP = 4096;
-const TRUNCATION_SUFFIX = '\n…[truncated by belfry; see terminal for full text]';
-
 async function handleToolCall(msg) {
   const name = msg.params?.name;
   const args = msg.params?.arguments ?? {};
@@ -181,16 +174,15 @@ async function handleToolCall(msg) {
     respondError(msg.id, -32602, 'reply: text must be a non-empty string');
     return;
   }
-  let toSend = text;
-  let truncatedFrom = null;
-  if (text.length > TELEGRAM_TEXT_CAP) {
-    truncatedFrom = text.length;
-    toSend = text.slice(0, TELEGRAM_TEXT_CAP - TRUNCATION_SUFFIX.length) + TRUNCATION_SUFFIX;
-  }
+  // No local truncation: the daemon's /send pipeline packs / chunks
+  // oversized text so the full reply makes it through. The user can ask
+  // for the original verbatim via the "full" command. Daemon enforces an
+  // absolute upper bound (lib/registry.js: MAX_SEND_TEXT_LEN); anything
+  // larger surfaces as a 413 here.
   const res = await fetch(`${DAEMON_BASE}/send`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ instance_id: instanceId, text: toSend }),
+    body: JSON.stringify({ instance_id: instanceId, text }),
   });
   if (!res.ok) {
     const errBody = await res.text().catch(() => '');
@@ -198,18 +190,17 @@ async function handleToolCall(msg) {
     return;
   }
   const body = await res.json().catch(() => ({}));
-  // Tool result echoes what was actually sent so the model can verify and the
-  // user can scroll back through verbatim copy in the terminal even when
-  // Telegram's render attenuates the message.
-  const sentLen = toSend.length;
+  // Echo what was sent so the model can verify and the terminal has a
+  // verbatim record even when Telegram-side rendering attenuates the
+  // visible body (packed / chunked).
   const summary = body?.message_id
-    ? `Sent to Telegram (message ${body.message_id}, ${sentLen} chars${truncatedFrom ? `, truncated from ${truncatedFrom}` : ''}).`
-    : `Sent to Telegram (${sentLen} chars${truncatedFrom ? `, truncated from ${truncatedFrom}` : ''}).`;
+    ? `Sent to Telegram (message ${body.message_id}, ${text.length} chars).`
+    : `Sent to Telegram (${text.length} chars).`;
   respond(msg.id, {
     content: [
       {
         type: 'text',
-        text: `${summary}\n\nSent text:\n${toSend}`,
+        text: `${summary}\n\nSent text:\n${text}`,
       },
     ],
   });

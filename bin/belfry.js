@@ -30,6 +30,9 @@ import { makeResumeHandler } from '../lib/resume-handler.js';
 import { BrainSupervisor } from '../lib/brain.js';
 import { BRAIN_SYSTEM_PROMPT } from '../lib/brain-prompt.js';
 import { makeBrainHandlers } from '../lib/brain-handlers.js';
+import { OversizeCache } from '../lib/oversize-cache.js';
+import { packForTelegram } from '../lib/pack.js';
+import { chunkParagraphAware } from '../lib/chunk.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -115,6 +118,14 @@ async function main() {
   // dashboard JSON is already there.
   const recentMessages = new RecentMessages();
 
+  // Late-bound BrainSupervisor reference. The pack pipeline inside
+  // `sendOutbound` (defined below) needs to consult the brain; brain
+  // construction itself depends on the registry's port + token which
+  // aren't known until later, so we declare the binding here and assign
+  // once the supervisor is built. Closures resolve `brain` at call time,
+  // by which point the assignment has happened.
+  let brain = null;
+
   // Resolve the topic to send a slug's outbound messages into. Per-slug
   // subscription override → BELFRY_FORUM_TOPIC_ID env fallback → main chat.
   const topicForSlug = (slug) => topicFor(config, slug) ?? (forumTopicId || null);
@@ -124,14 +135,82 @@ async function main() {
   // tracker so subsequent quote-replies on this thread route correctly.
   // Per-slug forum topic override means the right session's topic gets the
   // reply (when configured); otherwise the daemon-level fallback applies.
+  //
+  // Oversize handling: if the reply doesn't fit one Telegram message we
+  // pack it via the brain (or paragraph-truncate as fallback), stash the
+  // original in `oversizeCache`, and append a "Reply 'full' for the
+  // complete response" footer. The user can later quote-reply with "full"
+  // to retrieve the original chunked across multiple messages.
+  const oversizeCache = new OversizeCache({ max: 50 });
+  // Reserve room for the footer plus a small buffer for the ID-suffix
+  // wording. The pack helper takes `reservedFooterChars` and aims for
+  // (limit - reserved) chars of body.
+  const TELEGRAM_TEXT_CAP = 4096;
+  const FULL_FOOTER = '\n\n↩ Reply "full" to this message for the complete response';
+  const PACK_TRIGGER = TELEGRAM_TEXT_CAP - FULL_FOOTER.length;
   const sendOutbound = async ({ slug, text, replyToMessageId }) => {
+    let toSend = text;
+    let stashOriginal = null;
+    let packMode = null;
+    if (text.length > PACK_TRIGGER) {
+      const packed = await packForTelegram(text, {
+        brain,
+        limit: TELEGRAM_TEXT_CAP,
+        reservedFooterChars: FULL_FOOTER.length,
+        log,
+      });
+      toSend = packed.text + FULL_FOOTER;
+      stashOriginal = text;
+      packMode = packed.mode;
+    }
     const result = await sendMessage({
-      botToken, chatId, text, forumTopicId: topicForSlug(slug), replyToMessageId,
+      botToken, chatId, text: toSend, forumTopicId: topicForSlug(slug), replyToMessageId,
     });
-    if (result?.message_id) replyTracker.record(result.message_id, slug);
-    recentMessages.push(slug, { kind: 'outbound', text });
-    log(`sent ${slug}: outbound reply (${text.length} chars, msg ${result?.message_id}${replyToMessageId ? `, in reply to ${replyToMessageId}` : ''})`);
+    if (result?.message_id) {
+      replyTracker.record(result.message_id, slug);
+      if (stashOriginal) oversizeCache.put(result.message_id, slug, stashOriginal);
+    }
+    recentMessages.push(slug, { kind: 'outbound', text: toSend });
+    const packTag = packMode ? `, packed=${packMode} (orig ${text.length}→${toSend.length})` : '';
+    log(`sent ${slug}: outbound reply (${toSend.length} chars, msg ${result?.message_id}${replyToMessageId ? `, in reply to ${replyToMessageId}` : ''}${packTag})`);
     return { message_id: result?.message_id };
+  };
+
+  // /full expansion. When the user quote-replies "full" on a stashed
+  // oversized message, redeliver the original chunked into Telegram-
+  // sized messages (paragraph-aware splits). First chunk threads as a
+  // reply to the user's "full" message so the conversation stays linked;
+  // subsequent chunks thread under the previously-sent chunk so they
+  // arrive in order without spamming reply-icons.
+  const fullExpandHandler = async ({ targetMessageId, messageId }) => {
+    const entry = oversizeCache.get(targetMessageId);
+    if (!entry) {
+      log(`full-expand: no stash for msg ${targetMessageId} (already expanded or expired)`);
+      return;
+    }
+    const chunks = chunkParagraphAware(entry.text, TELEGRAM_TEXT_CAP);
+    let prevId = messageId;
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      try {
+        const result = await sendMessage({
+          botToken,
+          chatId,
+          text: chunk,
+          forumTopicId: topicForSlug(entry.slug),
+          replyToMessageId: prevId,
+        });
+        if (result?.message_id) {
+          replyTracker.record(result.message_id, entry.slug);
+          prevId = result.message_id;
+        }
+      } catch (err) {
+        log(`full-expand: chunk ${i + 1}/${chunks.length} for msg ${targetMessageId} failed: ${err.message}`);
+        return;
+      }
+    }
+    oversizeCache.delete(targetMessageId);
+    log(`full-expand: sent ${chunks.length} chunk(s) for msg ${targetMessageId} (${entry.text.length} chars total)`);
   };
 
   const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound });
@@ -242,7 +321,7 @@ async function main() {
     ),
     { mode: 0o600 },
   );
-  const brain = new BrainSupervisor({
+  brain = new BrainSupervisor({
     workdir: brainDir,
     mcpConfigPath: brainMcpConfigPath,
     systemPrompt: BRAIN_SYSTEM_PROMPT,
@@ -301,8 +380,10 @@ async function main() {
     onApproval: approvalHandler,
     onResumeRequest: resumeHandler,
     onUnmatched: agentHandler,
+    onFullExpand: fullExpandHandler,
     resolveNickname: (token) => nicknames.resolve(token),
     resolveTopic: (id) => topicMap.get(id) ?? null,
+    hasFullStash: (msgId) => oversizeCache.has(msgId),
     attachmentDir,
     log,
   });

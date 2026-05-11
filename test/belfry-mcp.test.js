@@ -213,17 +213,18 @@ test('reply tool POSTs to daemon /send and reports the message_id', async () => 
   assert.equal(calls[0].slug, 'reply-test');
   assert.equal(calls[0].text, 'hello human');
 
-  // A reply over Telegram's 4096-char cap gets locally truncated with a
-  // suffix; tool result reports the original length so the model knows.
+  // A reply over Telegram's 4096-char cap passes through unchanged to the
+  // daemon — packing / chunking now lives there (lib/pack.js + the
+  // sendOutbound pipeline in bin/belfry.js), not in the spoke. The spoke
+  // just hands the full text off and echoes what was sent.
   const huge = 'X'.repeat(5000);
   send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'reply', arguments: { text: huge } } });
   const resp2 = await waitFor((m) => m.id === 3);
-  assert.match(resp2.result.content[0].text, /truncated from 5000/);
-  assert.match(resp2.result.content[0].text, /truncated by belfry/);
-  // Only one /send call was made (we don't chunk).
+  assert.match(resp2.result.content[0].text, /5000 chars/);
+  assert.doesNotMatch(resp2.result.content[0].text, /truncated/);
   assert.equal(calls.length, 2);
-  assert.ok(calls[1].text.length <= 4096);
-  assert.match(calls[1].text, /truncated by belfry/);
+  assert.equal(calls[1].text.length, 5000);
+  assert.equal(calls[1].text, huge);
 
   child.stdin.end();
   await new Promise((resolve) => {

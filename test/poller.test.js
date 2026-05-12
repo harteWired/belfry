@@ -577,3 +577,67 @@ test('tick: unmatched dropped silently when onUnmatched not wired', async () => 
   await poller.tick();
   assert.equal(target.delivered.length, 0);
 });
+
+test('duplicate update_id: second occurrence is skipped', async () => {
+  // Defends against the duplicate-reply bug observed 2026-05-11: one
+  // user message resulted in both a deliver-route and an unmatched-route
+  // (with the brain firing on the second). Telegram's contract is
+  // unique-update-id but we've seen duplicates in production.
+  const dupUpdate = {
+    update_id: 1000,
+    message: { message_id: 1, chat: { id: CHAT }, text: '/life-planner ping' },
+  };
+  const { poller, target } = makePoller([dupUpdate]);
+  await poller.tick();
+  // Re-tick with the same update_id (as if Telegram redelivered it).
+  poller.fetchFn = fakeOk([{ ...dupUpdate }]);
+  await poller.tick();
+  assert.equal(target.delivered.length, 1, 'second delivery suppressed');
+  assert.equal(target.delivered[0].text, 'ping');
+});
+
+test('duplicate update_id within the same batch is skipped', async () => {
+  // Belt-and-suspenders: if Telegram ever returns the same id twice in
+  // one response (a contract violation we'd rather not crash on), the
+  // ring still catches it.
+  const updates = [
+    { update_id: 1100, message: { message_id: 1, chat: { id: CHAT }, text: '/life-planner once' } },
+    { update_id: 1100, message: { message_id: 1, chat: { id: CHAT }, text: '/life-planner once' } },
+  ];
+  const { poller, target } = makePoller(updates);
+  await poller.tick();
+  assert.equal(target.delivered.length, 1);
+  assert.equal(poller.offset, 1101);
+});
+
+test('non-numeric update_id passes through (defensive)', async () => {
+  // Tests that may pass update_id of unusual types still process. Real
+  // Telegram always sends numeric, but the dedup must not break tests
+  // or weird payloads.
+  const updates = [
+    { update_id: 'x', message: { message_id: 1, chat: { id: CHAT }, text: '/life-planner test' } },
+  ];
+  const { poller, target } = makePoller(updates);
+  await poller.tick();
+  assert.equal(target.delivered.length, 1);
+});
+
+test('ring buffer evicts oldest when full', async () => {
+  // Exercise the eviction path by pushing many fake update_ids through.
+  const updates = [];
+  for (let i = 0; i < 300; i += 1) {
+    updates.push({
+      update_id: 10_000 + i,
+      message: { message_id: i + 1, chat: { id: CHAT }, text: '/life-planner ' + i },
+    });
+  }
+  const { poller, target } = makePoller(updates);
+  await poller.tick();
+  assert.equal(target.delivered.length, 300, 'all 300 distinct updates dispatched');
+  // The earliest update_id should now be evicted from the dedup ring;
+  // a re-tick of that exact id should be dispatched again. (Cheap to
+  // accept: 256-entry window covers any realistic Telegram retry window.)
+  poller.fetchFn = fakeOk([{ ...updates[0] }]);
+  await poller.tick();
+  assert.equal(target.delivered.length, 301);
+});

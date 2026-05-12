@@ -138,3 +138,36 @@ test('decline: sends a polite Telegram message and returns sent flag', async () 
   assert.equal(send.calls[0].text, 'cannot help with that');
   assert.equal(send.calls[0].replyToMessageId, 50);
 });
+
+test('action flag: starts false, set by deliver, reset by resetActionFlag', () => {
+  const h = makeBrainHandlers(baseDeps());
+  assert.equal(h.didActionFire(), false, 'flag starts false');
+  h.deliver({ slug: 'belfry', body: 'forward', reply_to_message_id: 10 });
+  assert.equal(h.didActionFire(), true, 'deliver sets the flag');
+  h.resetActionFlag();
+  assert.equal(h.didActionFire(), false, 'reset clears the flag');
+});
+
+test('action flag: set by reply tool', async () => {
+  const h = makeBrainHandlers(baseDeps());
+  h.resetActionFlag();
+  await h.reply({ text: 'hello', reply_to_message_id: 11 });
+  assert.equal(h.didActionFire(), true);
+});
+
+test('action flag: set by decline tool', async () => {
+  const h = makeBrainHandlers(baseDeps());
+  h.resetActionFlag();
+  await h.decline({ message: 'no', reply_to_message_id: 12 });
+  assert.equal(h.didActionFire(), true);
+});
+
+test('action flag: NOT set by read-only tools', () => {
+  const h = makeBrainHandlers(baseDeps());
+  h.resetActionFlag();
+  h.listSessions();
+  h.getSession({ slug: 'belfry' });
+  h.recentMessages({ slug: 'belfry' });
+  h.nicknames();
+  assert.equal(h.didActionFire(), false);
+});

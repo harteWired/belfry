@@ -356,6 +356,7 @@ async function main() {
 
   const agentHandler = makeAgentHandler({
     brain,
+    brainHandlers,
     send: ({ text, replyToMessageId }) =>
       sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
     log,

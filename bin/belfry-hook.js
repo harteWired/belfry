@@ -38,6 +38,23 @@ const STATUS_DIR = join(tmpdir(), 'claude-dashboard');
 // invisible to the hook — that's fine; we only need the most recent pair.
 const TAIL_BUF_BYTES = 64 * 1024;
 
+// Retry budget for the transcript-flush race (2026-05-22). Claude Code can
+// fire the Stop hook before the final assistant text block has been flushed
+// to disk. If our first scan returns no last_response, sleep briefly and
+// retry once — flushes empirically land within ~50–150ms. Cost is bounded
+// to FLUSH_RETRY_MS even on legitimate pure-tool turns, which is
+// acceptable given Stop / Notification are not on the hot path the way
+// PreToolUse is.
+const FLUSH_RETRY_MS = 150;
+
+function syncSleep(ms) {
+  // Block this subprocess thread for ms. We're in a one-shot CLI invoked
+  // synchronously by Claude Code's hook runner — there's no event loop to
+  // protect. Atomics.wait on an unshared buffer that never gets notified
+  // is the standard Node idiom for "sleep without spinning."
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
 function readStdin() {
   return new Promise((resolve) => {
     let buf = '';
@@ -106,6 +123,14 @@ function isToolResultOnly(content) {
  * case for tool-heavy turns). That manifested as Telegram pings being
  * one event out of phase — the user observed it on 2026-05-22.
  *
+ * Flush-race retry (v0.1.3, 2026-05-22): Claude Code can also fire the
+ * Stop hook BEFORE the final assistant text block has been flushed to
+ * disk. The user saw this when the v0.1.2 hook captured "Now claudelike-
+ * bar." as last_response despite the final text being a 1.6KB summary
+ * with a timestamp 100ms earlier — at the time the hook ran, that text
+ * was not yet on disk. Defense: if the first scan finds no last_response,
+ * sync-sleep ~150ms and retry once.
+ *
  * Fix: walk backward but bound the walk at the next non-tool_result user
  * entry (the turn-start prompt). Tool-result user entries are part of
  * this turn and we walk past them; a real user message marks the
@@ -118,6 +143,19 @@ function isToolResultOnly(content) {
  * constant cost.
  */
 export function tailTranscript(transcriptPath) {
+  let result = tailTranscriptOnce(transcriptPath);
+  if (result.last_response) return result;
+  // No last_response found. Could be a legitimate pure-tool turn, or the
+  // flush race. One brief retry catches the race without meaningfully
+  // delaying the legitimate-null case.
+  syncSleep(FLUSH_RETRY_MS);
+  const retried = tailTranscriptOnce(transcriptPath);
+  // Prefer the retry's result wholesale — the file can only grow between
+  // reads, so a successful retry strictly improves on the first.
+  return retried.last_response ? retried : result;
+}
+
+function tailTranscriptOnce(transcriptPath) {
   let fd = null;
   try {
     fd = openSync(transcriptPath, 'r');

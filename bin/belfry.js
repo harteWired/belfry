@@ -34,6 +34,7 @@ import { OversizeCache } from '../lib/oversize-cache.js';
 import { packForTelegram } from '../lib/pack.js';
 import { chunkParagraphAware } from '../lib/chunk.js';
 import { makeVoiceHandler } from '../lib/voice.js';
+import { PingDedup } from '../lib/ping-dedup.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -504,6 +505,16 @@ async function main() {
     flush: digestFlush,
   });
 
+  // Per-slug dedup on last_response_at — suppress identical-content "ready"
+  // pings. Without this, every Stop event re-pings even when the turn
+  // produced no new assistant text (the dashboard hook preserves the prior
+  // last_response across pure-tool turns), and /loop watchdog turns fan
+  // out repeat pings carrying stale prior-turn text. Observed 2026-05-22:
+  // 5+ identical "Now claudelike-bar." pings across consecutive doctor
+  // /loop turns. Only applied to ready — error and waiting fire
+  // unconditionally (low-volume + critical signals). See lib/ping-dedup.js.
+  const pingDedup = new PingDedup();
+
   watcher = new StatusWatcher({
     onUpdate: ({ slug, statusFile, prevStatusFile }) => {
       const newStatus = statusFile?.status;
@@ -526,6 +537,15 @@ async function main() {
       });
 
       if (!shouldFire(config, slug, prevStatus, newStatus)) return;
+
+      // Dedup: skip if this is a ready ping and last_response hasn't
+      // advanced since the last ping. Errors and waiting events always
+      // fire — they're rare and represent state the user must see.
+      if (newStatus === 'ready' && pingDedup.shouldSkip(slug, statusFile?.last_response_at)) {
+        log(`dedup: skipped ${slug} ready ping (last_response_at unchanged at ${statusFile.last_response_at})`);
+        return;
+      }
+
       const event = { status: newStatus, event: statusFile.event, statusFile };
       if (isDigested(config, slug)) {
         digest.enqueue(slug, event);

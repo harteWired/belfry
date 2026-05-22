@@ -194,6 +194,21 @@ The repo is open source and tied to a real name. That's deliberate: the trust mo
 
 Out of scope for now: per-session permission answers, interrupt-and-replace mid-tool-call. Both possible on top of Phase 2 by adding more notification methods to the plugin.
 
+## Health check
+
+`bin/belfry-doctor.js` is a four-check probe for a live daemon — supervisor PID matches the expected cmdline, the `node bin/belfry.js` process is up, `belfry.log` has been written recently, and the loopback registry returns the expected 401 on an unauthenticated GET. Exit code reflects health (`0` green, `1` unhealthy).
+
+```
+node bin/belfry-doctor.js              # read-only health probe
+node bin/belfry-doctor.js --json       # machine-readable
+node bin/belfry-doctor.js --fix        # invoke the launcher on failure (idempotent)
+node bin/belfry-doctor.js --quiet --fix  # for cron / loop usage — silent unless something fails
+```
+
+The PID match guards against the recycled-PID failure mode: `kill -0 <pid>` reports any live process as healthy, so a recycled PID held by an unrelated worker (a real outage on 2026-05-22 had this exact shape) would otherwise look fine to a naive check.
+
+**Periodic supervision.** The supervisor in `belfry-launch.sh` is the primary restart mechanism — it ignores SIGHUP, runs under `setsid`, and respawns the daemon with exponential backoff. For defense-in-depth against supervisor death, run `belfry-doctor --fix --quiet` on a schedule. In an environment without cron (this devcontainer), the Claude Code `/loop` skill is the simplest option: `/loop 10m run \`node /workspace/projects/belfry/bin/belfry-doctor.js --fix --quiet\` and only report if exit code is nonzero`. On a host with cron available, the same one-liner in your crontab gives session-independent coverage.
+
 ## Running tests
 
 ```

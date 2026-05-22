@@ -130,6 +130,11 @@ async function main() {
   // by which point the assignment has happened.
   let brain = null;
 
+  // Per-slug dedup for ready pings (content equality + reply-tool echo
+  // suppression). Hoisted above sendOutbound so the reply path can stash
+  // the just-sent text synchronously — see lib/ping-dedup.js.
+  const pingDedup = new PingDedup();
+
   // Resolve the topic to send a slug's outbound messages into. Per-slug
   // subscription override → BELFRY_FORUM_TOPIC_ID env fallback → main chat.
   const topicForSlug = (slug) => topicFor(config, slug) ?? (forumTopicId || null);
@@ -175,6 +180,10 @@ async function main() {
       if (stashOriginal) oversizeCache.put(result.message_id, slug, stashOriginal);
     }
     recentMessages.push(slug, { kind: 'outbound', text: toSend });
+    // Stash the un-packed original — the Stop hook will record this same
+    // text into `last_response`, so the subsequent ready ping for this slug
+    // matches and is suppressed by pingDedup (v0.1.4 reply-tool echo fix).
+    pingDedup.recordJustSent(slug, text);
     const packTag = packMode ? `, packed=${packMode} (orig ${text.length}→${toSend.length})` : '';
     log(`sent ${slug}: outbound reply (${toSend.length} chars, msg ${result?.message_id}${replyToMessageId ? `, in reply to ${replyToMessageId}` : ''}${packTag})`);
     return { message_id: result?.message_id };
@@ -505,16 +514,6 @@ async function main() {
     flush: digestFlush,
   });
 
-  // Per-slug dedup on last_response_at — suppress identical-content "ready"
-  // pings. Without this, every Stop event re-pings even when the turn
-  // produced no new assistant text (the dashboard hook preserves the prior
-  // last_response across pure-tool turns), and /loop watchdog turns fan
-  // out repeat pings carrying stale prior-turn text. Observed 2026-05-22:
-  // 5+ identical "Now claudelike-bar." pings across consecutive doctor
-  // /loop turns. Only applied to ready — error and waiting fire
-  // unconditionally (low-volume + critical signals). See lib/ping-dedup.js.
-  const pingDedup = new PingDedup();
-
   watcher = new StatusWatcher({
     onUpdate: ({ slug, statusFile, prevStatusFile }) => {
       const newStatus = statusFile?.status;
@@ -538,11 +537,14 @@ async function main() {
 
       if (!shouldFire(config, slug, prevStatus, newStatus)) return;
 
-      // Dedup: skip if this is a ready ping and last_response hasn't
-      // advanced since the last ping. Errors and waiting events always
-      // fire — they're rare and represent state the user must see.
-      if (newStatus === 'ready' && pingDedup.shouldSkip(slug, statusFile?.last_response_at)) {
-        log(`dedup: skipped ${slug} ready ping (last_response_at unchanged at ${statusFile.last_response_at})`);
+      // Dedup: skip if this is a ready ping and `last_response` matches
+      // either (a) the text we just shipped via the reply tool (within the
+      // recency window), or (b) the body of the last ready ping we sent
+      // for this slug. Errors and waiting events always fire — they're
+      // rare and represent state the user must see.
+      if (newStatus === 'ready' && pingDedup.shouldSkip(slug, statusFile?.last_response)) {
+        const len = typeof statusFile?.last_response === 'string' ? statusFile.last_response.length : 0;
+        log(`dedup: skipped ${slug} ready ping (last_response unchanged, ${len} chars)`);
         return;
       }
 

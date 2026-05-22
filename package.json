@@ -9,7 +9,8 @@
     "belfry": "bin/belfry.js",
     "belfry-mcp": "bin/belfry-mcp.js",
     "belfry-hook": "bin/belfry-hook.js",
-    "belfry-install-hook": "bin/belfry-install-hook.js"
+    "belfry-install-hook": "bin/belfry-install-hook.js",
+    "belfry-doctor": "bin/belfry-doctor.js"
   },
   "scripts": {
     "start": "node bin/belfry.js",

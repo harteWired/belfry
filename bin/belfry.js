@@ -158,6 +158,14 @@ async function main() {
   const FULL_FOOTER = '\n\n↩ Reply "full" to this message for the complete response';
   const PACK_TRIGGER = TELEGRAM_TEXT_CAP - FULL_FOOTER.length;
   const sendOutbound = async ({ slug, text, replyToMessageId }) => {
+    // Arm the echo muzzle SYNCHRONOUSLY before any await. The sync prefix
+    // of an async function runs in the calling tick, so a same-tick
+    // `onUpdate` → `shouldSkip` (the auto-reply path) sees the muzzle
+    // before its own check. v0.1.5: drops v0.1.4's text-equality stash
+    // because the reply-tool `text` arg is never byte-identical to the
+    // Stop-hook-derived `last_response` — time proximity is the right
+    // invariant. See lib/ping-dedup.js.
+    pingDedup.muzzleNext(slug);
     let toSend = text;
     let stashOriginal = null;
     let packMode = null;
@@ -180,10 +188,6 @@ async function main() {
       if (stashOriginal) oversizeCache.put(result.message_id, slug, stashOriginal);
     }
     recentMessages.push(slug, { kind: 'outbound', text: toSend });
-    // Stash the un-packed original — the Stop hook will record this same
-    // text into `last_response`, so the subsequent ready ping for this slug
-    // matches and is suppressed by pingDedup (v0.1.4 reply-tool echo fix).
-    pingDedup.recordJustSent(slug, text);
     const packTag = packMode ? `, packed=${packMode} (orig ${text.length}→${toSend.length})` : '';
     log(`sent ${slug}: outbound reply (${toSend.length} chars, msg ${result?.message_id}${replyToMessageId ? `, in reply to ${replyToMessageId}` : ''}${packTag})`);
     return { message_id: result?.message_id };
@@ -537,14 +541,15 @@ async function main() {
 
       if (!shouldFire(config, slug, prevStatus, newStatus)) return;
 
-      // Dedup: skip if this is a ready ping and `last_response` matches
-      // either (a) the text we just shipped via the reply tool (within the
-      // recency window), or (b) the body of the last ready ping we sent
-      // for this slug. Errors and waiting events always fire — they're
-      // rare and represent state the user must see.
+      // Dedup: skip if this is a ready ping AND either (a) the muzzle is
+      // armed (an outbound send for this slug fired recently — the ping is
+      // the echo of that send), or (b) `last_response` matches the body
+      // of the last ready ping we sent for this slug (/loop watchdog).
+      // Errors and waiting events always fire — they're rare and represent
+      // state the user must see.
       if (newStatus === 'ready' && pingDedup.shouldSkip(slug, statusFile?.last_response)) {
         const len = typeof statusFile?.last_response === 'string' ? statusFile.last_response.length : 0;
-        log(`dedup: skipped ${slug} ready ping (last_response unchanged, ${len} chars)`);
+        log(`dedup: skipped ${slug} ready ping (${len} chars)`);
         return;
       }
 

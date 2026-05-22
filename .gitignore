@@ -5,3 +5,4 @@ node_modules/
 # State + runtime
 state/
 .belfry/
+.claude/

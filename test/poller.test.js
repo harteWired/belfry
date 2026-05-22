@@ -641,3 +641,111 @@ test('ring buffer evicts oldest when full', async () => {
   await poller.tick();
   assert.equal(target.delivered.length, 301);
 });
+
+test('voice: transcribed text falls through normal routing (prefix path)', async () => {
+  const updates = [
+    {
+      update_id: 1300,
+      message: {
+        message_id: 13,
+        chat: { id: CHAT },
+        voice: { file_id: 'VV', duration: 5, mime_type: 'audio/ogg' },
+      },
+    },
+  ];
+  const echoCalls = [];
+  const handleVoice = async () => ({ text: '/life-planner deploy the api fix', audioPath: '/tmp/v.ogg' });
+  const sendVoiceReply = async (args) => { echoCalls.push(args); };
+  const replyTracker = new ReplyTracker();
+  const target = fakeTarget(['life-planner']);
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker,
+    target,
+    fetchFn: fakeOk(updates),
+    handleVoice,
+    sendVoiceReply,
+  });
+  await poller.tick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(target.delivered, [{ slug: 'life-planner', text: 'deploy the api fix' }]);
+  assert.equal(echoCalls.length, 1, 'echo should fire exactly once');
+  assert.match(echoCalls[0].text, /^🎙 "/);
+  assert.equal(echoCalls[0].replyToMessageId, 13);
+});
+
+test('voice: error result triggers user-facing reply and skips routing', async () => {
+  const updates = [
+    {
+      update_id: 1310,
+      message: {
+        message_id: 14,
+        chat: { id: CHAT },
+        voice: { file_id: 'VV', duration: 5 },
+      },
+    },
+  ];
+  const echoCalls = [];
+  const handleVoice = async () => ({ error: 'no-key' });
+  const sendVoiceReply = async (args) => { echoCalls.push(args); };
+  const target = fakeTarget(['life-planner']);
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker: new ReplyTracker(),
+    target,
+    fetchFn: fakeOk(updates),
+    handleVoice,
+    sendVoiceReply,
+  });
+  await poller.tick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(target.delivered.length, 0, 'voice errors must not route');
+  assert.equal(echoCalls.length, 1);
+  assert.match(echoCalls[0].text, /BELFRY_TRANSCRIBE_KEY/);
+  assert.equal(echoCalls[0].replyToMessageId, 14);
+});
+
+test('voice: no handler wired → voice messages drop silently (back-compat)', async () => {
+  const updates = [
+    {
+      update_id: 1320,
+      message: {
+        message_id: 15,
+        chat: { id: CHAT },
+        voice: { file_id: 'VV', duration: 5 },
+      },
+    },
+  ];
+  const { poller, target } = makePoller(updates);
+  await poller.tick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(target.delivered.length, 0);
+});
+
+test('voice: chat-id mismatch skips voice handler entirely', async () => {
+  const updates = [
+    {
+      update_id: 1330,
+      message: {
+        message_id: 16,
+        chat: { id: 99999 },
+        voice: { file_id: 'VV', duration: 5 },
+      },
+    },
+  ];
+  let handlerCalled = false;
+  const poller = new Poller({
+    botToken: 'TOKEN',
+    expectedChatId: CHAT,
+    replyTracker: new ReplyTracker(),
+    target: fakeTarget(),
+    fetchFn: fakeOk(updates),
+    handleVoice: async () => { handlerCalled = true; return { text: 'x' }; },
+    sendVoiceReply: async () => {},
+  });
+  await poller.tick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(handlerCalled, false, 'foreign chat must not touch the transcribe API');
+});

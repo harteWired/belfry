@@ -33,6 +33,7 @@ import { makeBrainHandlers } from '../lib/brain-handlers.js';
 import { OversizeCache } from '../lib/oversize-cache.js';
 import { packForTelegram } from '../lib/pack.js';
 import { chunkParagraphAware } from '../lib/chunk.js';
+import { makeVoiceHandler } from '../lib/voice.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -68,6 +69,8 @@ async function main() {
   const chatId = (process.env.BELFRY_CHAT_ID ?? '').trim();
   const forumTopicId = (process.env.BELFRY_FORUM_TOPIC_ID ?? '').trim();
   const mcpPort = Number(process.env.BELFRY_MCP_PORT || 49876);
+  const transcribeKey = (process.env.BELFRY_TRANSCRIBE_KEY ?? '').trim();
+  const transcribeProvider = (process.env.BELFRY_TRANSCRIBE_PROVIDER ?? '').trim() || undefined;
   if (!botToken || !chatId) {
     log('missing BELFRY_TOKEN and/or BELFRY_CHAT_ID env vars — relay disabled');
     log('see README.md for setup. Common pattern: a launcher script reads from your secret store and exec-s belfry with the env vars set.');
@@ -370,6 +373,37 @@ async function main() {
     log(`forum topics: ${topicMap.size} slug(s) bound to topic IDs`);
   }
 
+  // Inbound voice notes (#19): when BELFRY_TRANSCRIBE_KEY is set, hand the
+  // Telegram voice file to a Whisper-compatible provider (Groq by default)
+  // and re-route the transcript as a normal text message. Without a key the
+  // handler still runs — it replies once per voice note to say so, then
+  // drops, so the user knows why nothing happened.
+  const handleVoice = makeVoiceHandler({
+    apiKey: transcribeKey,
+    provider: transcribeProvider,
+    botToken,
+    attachmentDir,
+    log,
+  });
+  const sendVoiceReply = async ({ text, replyToMessageId }) => {
+    try {
+      await sendMessage({
+        botToken,
+        chatId,
+        text,
+        forumTopicId,
+        replyToMessageId,
+      });
+    } catch (err) {
+      log(`voice reply failed: ${err.message}`);
+    }
+  };
+  if (transcribeKey) {
+    log(`voice transcription enabled (provider=${transcribeProvider ?? 'groq'})`);
+  } else {
+    log('voice transcription disabled (BELFRY_TRANSCRIBE_KEY not set) — voice notes will be acknowledged but dropped');
+  }
+
   const poller = new Poller({
     botToken,
     expectedChatId: Number(chatId),
@@ -386,6 +420,8 @@ async function main() {
     resolveTopic: (id) => topicMap.get(id) ?? null,
     hasFullStash: (msgId) => oversizeCache.has(msgId),
     attachmentDir,
+    handleVoice,
+    sendVoiceReply,
     log,
   });
   poller.start();
@@ -515,6 +551,13 @@ async function main() {
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
+  // SIGHUP arrives when the controlling terminal/PTY goes away — a normal
+  // event in a devcontainer where VS Code terminals come and go. Default
+  // node behavior is to terminate, which would crash the daemon every time
+  // the user closes the terminal that started the supervisor. We install a
+  // no-op handler so node keeps running; the supervisor itself also ignores
+  // SIGHUP (see belfry-launch.sh).
+  process.on('SIGHUP', () => log('SIGHUP received — ignoring (daemon stays up)'));
 }
 
 /**
@@ -568,6 +611,21 @@ function ensureAuthToken(tokenPath) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  // Last-ditch crash diagnostics. Without these, an unhandled rejection or
+  // a throw inside a sync HTTP callback terminates the daemon with whatever
+  // stderr write the runtime happens to make — empirically observed to
+  // leave belfry.log truncated mid-line or empty. Log the stack to stderr
+  // (which the launcher pipes to belfry.log) before letting the runtime
+  // terminate normally.
+  process.on('uncaughtException', (err, origin) => {
+    log(`uncaughtException (${origin}): ${err?.stack ?? err}`);
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (reason) => {
+    const stack = reason instanceof Error ? reason.stack : String(reason);
+    log(`unhandledRejection: ${stack}`);
+    process.exit(1);
+  });
   main().catch((err) => {
     log(`fatal: ${err.stack ?? err.message}`);
     process.exit(1);

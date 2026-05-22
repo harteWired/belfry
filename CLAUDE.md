@@ -63,6 +63,7 @@ lib/router.js              — incoming Telegram update → (slug, text, message
 lib/poller.js              — Telegram getUpdates long-poll loop
 lib/registry.js            — HTTP register/unregister/recv/send + pending-reply tracking
 lib/slug.js                — slug derivation per docs/CONVENTION.md
+lib/voice.js               — inbound Telegram voice-note transcription (Whisper via Groq/OpenAI)
 docs/CONVENTION.md         — shared local-machine convention spec
 docs/install-mcp.md        — how to add belfry-mcp to a project
 test/                      — node --test
@@ -119,6 +120,8 @@ Slug derivation order (see `lib/slug.js` and `docs/CONVENTION.md`): `CLAUDE_SESS
 | `BELFRY_MCP_PORT` | no | Override default MCP port (default `49876`, in the IANA dynamic range) |
 | `BELFRY_RESUME_LAUNCHER` | no | Optional script for `/resume <slug> <uuid>` to exec as a detached subprocess. Without it, `/resume` emits a copyable command. |
 | `BELFRY_STATE_DIR` | no | Override the state directory (default `$XDG_STATE_HOME/belfry` or `~/.local/state/belfry`). |
+| `BELFRY_TRANSCRIBE_KEY` | no | API key for inbound voice-note transcription. Without it, voice notes are acknowledged once with a "voice support is off" reply and dropped. |
+| `BELFRY_TRANSCRIBE_PROVIDER` | no | `groq` (default) or `openai`. Both speak Whisper's `audio/transcriptions` shape — provider is just an endpoint + default model swap. |
 
 The conversational agent + summarizer run inside a long-running `claude --print --input-format=stream-json` subprocess (the "brain"; see `lib/brain.js`) that uses the user's Claude.ai subscription via OAuth — no `ANTHROPIC_API_KEY` needed. Without claude on PATH or without subscription credentials, the brain simply doesn't start; deterministic routes still work and language-layer routes return "language layer is down".
 
@@ -127,6 +130,7 @@ The conversational agent + summarizer run inside a long-running `claude --print 
 1. No prompt or response text is logged to stderr — only event metadata (slug, status, timestamps).
 2. Bot token + chat ID are passed as env vars only — no on-disk config inside the project.
 3. Inbound: only messages from `BELFRY_CHAT_ID` are accepted. Telegram replies from any other chat are dropped silently. Don't introduce a whitelist of additional chat IDs without a real reason — single-user is the design.
+4. Voice notes only leave the host when `BELFRY_TRANSCRIBE_KEY` is set — the daemon downloads the audio to the attachment dir and POSTs it to the configured Whisper provider (Groq by default). Without the key, voice notes are dropped without any network call past Telegram. Treat the key as opt-in for an additional egress destination, not as a quality-of-life toggle.
 
 ## Setup
 

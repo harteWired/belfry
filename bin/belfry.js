@@ -156,7 +156,11 @@ async function main() {
   // (limit - reserved) chars of body.
   const TELEGRAM_TEXT_CAP = 4096;
   const FULL_FOOTER = '\n\n↩ Reply "full" to this message for the complete response';
-  const PACK_TRIGGER = TELEGRAM_TEXT_CAP - FULL_FOOTER.length;
+  // Project-tag prefix for every outbound reply. The user reads Telegram
+  // and needs a one-glance answer to "which session is talking to me right
+  // now?" — slug-tagged for session replies, "daemon:" for daemon-level
+  // sends (brain, /status, command handlers).
+  const replyHeader = (slug) => `${slug || 'daemon'}:\n\n`;
   const sendOutbound = async ({ slug, text, replyToMessageId }) => {
     // Arm the echo muzzle SYNCHRONOUSLY before any await. The sync prefix
     // of an async function runs in the calling tick, so a same-tick
@@ -166,17 +170,19 @@ async function main() {
     // Stop-hook-derived `last_response` — time proximity is the right
     // invariant. See lib/ping-dedup.js.
     pingDedup.muzzleNext(slug);
-    let toSend = text;
+    const header = replyHeader(slug);
+    const packTrigger = TELEGRAM_TEXT_CAP - FULL_FOOTER.length - header.length;
+    let toSend = header + text;
     let stashOriginal = null;
     let packMode = null;
-    if (text.length > PACK_TRIGGER) {
+    if (text.length > packTrigger) {
       const packed = await packForTelegram(text, {
         brain,
         limit: TELEGRAM_TEXT_CAP,
-        reservedFooterChars: FULL_FOOTER.length,
+        reservedFooterChars: FULL_FOOTER.length + header.length,
         log,
       });
-      toSend = packed.text + FULL_FOOTER;
+      toSend = header + packed.text + FULL_FOOTER;
       stashOriginal = text;
       packMode = packed.mode;
     }
@@ -366,7 +372,13 @@ async function main() {
     nicknames,
     registry,
     sendTelegram: ({ text, replyToMessageId }) =>
-      sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
+      sendMessage({
+        botToken,
+        chatId,
+        text: `${replyHeader(null)}${text}`,
+        forumTopicId,
+        replyToMessageId,
+      }),
     log,
   });
   registry.setBrainHandlers(brainHandlers);

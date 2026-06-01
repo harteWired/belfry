@@ -10,7 +10,7 @@ import { StatusWatcher } from '../lib/watcher.js';
 import { Throttle } from '../lib/throttle.js';
 import { Digest } from '../lib/digest.js';
 import { compose } from '../lib/composer.js';
-import { sendMessage } from '../lib/telegram.js';
+import { sendMessage, setMessageReaction } from '../lib/telegram.js';
 import { ReplyTracker } from '../lib/reply-tracker.js';
 import { Registry } from '../lib/registry.js';
 import { Poller } from '../lib/poller.js';
@@ -136,6 +136,16 @@ async function main() {
   // the just-sent text synchronously — see lib/ping-dedup.js.
   const pingDedup = new PingDedup();
 
+  // Routing-status emoji reactions (#32): 👀 delivered / 🤷 dropped / 🤔
+  // unmatched on the inbound (fired by the poller), and 🫡 replied — swapped
+  // onto the originating message by sendOutbound when the session answers.
+  // Resolved from env (default on); see lib/reactions.js. Hoisted above
+  // sendOutbound so the reply path can read reactEmoji.replied.
+  const reactEmoji = resolveReactionConfig(process.env);
+  if (reactEmoji) {
+    log(`reactions on (delivered=${reactEmoji.delivered ?? '-'} dropped=${reactEmoji.dropped ?? '-'} unmatched=${reactEmoji.unmatched ?? '-'} replied=${reactEmoji.replied ?? '-'})`);
+  }
+
   // Resolve the topic to send a slug's outbound messages into. Per-slug
   // subscription override → BELFRY_FORUM_TOPIC_ID env fallback → main chat.
   const topicForSlug = (slug) => topicFor(config, slug) ?? (forumTopicId || null);
@@ -197,6 +207,21 @@ async function main() {
     recentMessages.push(slug, { kind: 'outbound', text: toSend });
     const packTag = packMode ? `, packed=${packMode} (orig ${text.length}→${toSend.length})` : '';
     log(`sent ${slug}: outbound reply (${toSend.length} chars, msg ${result?.message_id}${replyToMessageId ? `, in reply to ${replyToMessageId}` : ''}${packTag})`);
+    // Swap the originating inbound's routing-status reaction to the 'replied'
+    // emoji (🫡 by default) now that the session has answered — the 👀 ack
+    // becomes a visible "done" marker. Only when reactions are on, a 'replied'
+    // emoji is configured, and we threaded to an originating message. In the
+    // normal path `replyToMessageId` comes from the registry's owes-reply
+    // marker, which is set only for delivered inbounds that got the 👀, so
+    // 🤷/🤔 messages never get swapped. (A spoke could in theory pass an
+    // explicit reply_to_message_id that bypasses the marker — the current
+    // belfry-mcp never does; if one did, the swap would land on whatever it
+    // named.) Fire-and-forget: a failed swap must never affect the reply that
+    // already went out.
+    if (reactEmoji?.replied && typeof replyToMessageId === 'number' && replyToMessageId > 0) {
+      setMessageReaction({ botToken, chatId, messageId: replyToMessageId, emoji: reactEmoji.replied })
+        .catch((err) => log(`reaction swap failed (msg ${replyToMessageId}): ${err.message}`));
+    }
     return { message_id: result?.message_id };
   };
 
@@ -429,14 +454,6 @@ async function main() {
     log(`voice transcription enabled (provider=${transcribeProvider ?? 'groq'})`);
   } else {
     log('voice transcription disabled (BELFRY_TRANSCRIBE_KEY not set) — voice notes will be acknowledged but dropped');
-  }
-
-  // Routing-status emoji reactions (#32): 👀 delivered / 🤷 dropped / 🤔
-  // unmatched, fired on the inbound message the moment routing resolves.
-  // Resolved from env (default on); see lib/reactions.js.
-  const reactEmoji = resolveReactionConfig(process.env);
-  if (reactEmoji) {
-    log(`reactions on (delivered=${reactEmoji.delivered ?? '-'} dropped=${reactEmoji.dropped ?? '-'} unmatched=${reactEmoji.unmatched ?? '-'})`);
   }
 
   const poller = new Poller({

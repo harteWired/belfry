@@ -473,3 +473,40 @@ test('backwards compat: knownSlugs Set still works without hasSlug', () => {
   });
   assert.deepEqual(r, { action: 'deliver', slug: 'belfry', text: 'x', messageId: 99 });
 });
+
+// ── Broadcast /all (#30) ──────────────────────────────────────────────────
+
+test('/all <body> routes to a broadcast action', () => {
+  const r = route({ update: update({ text: '/all wrap up and commit' }), ...ctx() });
+  assert.deepEqual(r, { action: 'broadcast', text: 'wrap up and commit', messageId: 99 });
+});
+
+test('/all is case-insensitive and trims the body', () => {
+  const r = route({ update: update({ text: '/ALL   status check  ' }), ...ctx() });
+  assert.deepEqual(r, { action: 'broadcast', text: 'status check', messageId: 99 });
+});
+
+test('bare "all" without a slash is NOT a broadcast (too common in prose)', () => {
+  const r = route({ update: update({ text: 'all good here' }), ...ctx() });
+  assert.notEqual(r?.action, 'broadcast');
+});
+
+test('bare "/all" with no body falls through (not a broadcast)', () => {
+  const r = route({ update: update({ text: '/all' }), ...ctx() });
+  assert.notEqual(r?.action, 'broadcast');
+});
+
+test('a quote-reply "/all x" is NOT a broadcast — it talks to the quoted slug', () => {
+  const r = route({
+    update: update({ text: '/all keep going', replyToId: 42 }),
+    ...ctx({ tracked: [[42, 'life-planner']] }),
+  });
+  assert.deepEqual(r, { action: 'deliver', slug: 'life-planner', text: '/all keep going', messageId: 99 });
+});
+
+test('"all" is reserved on the prefix path (never delivers to a session named all)', () => {
+  // /all with a body but NOT matched as broadcast would only happen if ALL_RE
+  // failed; ensure a session literally named "all" can't be hit via prefix.
+  const r = route({ update: update({ text: '/all do thing' }), ...ctx({ knownSlugs: ['all'] }) });
+  assert.equal(r.action, 'broadcast', 'still a broadcast, never a deliver to slug "all"');
+});

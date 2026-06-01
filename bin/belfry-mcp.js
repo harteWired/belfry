@@ -46,6 +46,12 @@ const cwd = process.cwd();
 const slug = deriveSlug({ cwd, env: process.env });
 const instanceId = randomUUID();
 
+// Broadcast opt-out (#30): BELFRY_BROADCAST=0/off/false/no makes this session
+// decline `/all` fan-outs; reported to the daemon at register. Default: accept.
+const acceptsBroadcast = !['0', 'off', 'false', 'no'].includes(
+  (process.env.BELFRY_BROADCAST ?? '').trim().toLowerCase(),
+);
+
 let registered = false;
 let registerInFlight = false;
 let shuttingDown = false;
@@ -106,7 +112,7 @@ function handleMessage(msg) {
         },
       },
       instructions:
-        'Belfry messages arrive as user input wrapped in a <channel source="belfry" ...> tag; they originate from Telegram replies the sender quoted to a belfry message. Input typed directly into the terminal carries NO such tag. The reply tool sends text to the sender\'s phone over Telegram, and is valid ONLY on a turn whose inbound message was belfry-tagged. When the current turn came from the terminal (no <channel source="belfry"> tag), answer in the terminal and do NOT call reply — pushing terminal-origin answers to Telegram is noise. The terminal is the canonical full transcript: whenever you DO reply to Telegram, also render the full response as normal terminal text, so the terminal never carries less than what went to the phone. Status pings (ready/error) fire automatically via the daemon and do not need a reply call.',
+        'Belfry messages arrive as user input wrapped in a <channel source="belfry" ...> tag; they originate from Telegram replies the sender quoted to a belfry message. Input typed directly into the terminal carries NO such tag. The reply tool sends text to the sender\'s phone over Telegram, and is valid ONLY on a turn whose inbound message was belfry-tagged. When the current turn came from the terminal (no <channel source="belfry"> tag), answer in the terminal and do NOT call reply — pushing terminal-origin answers to Telegram is noise. The terminal is the canonical full transcript: whenever you DO reply to Telegram, also render the full response as normal terminal text, so the terminal never carries less than what went to the phone. If the channel tag carries broadcast="true", this message was fanned out to every session at once (a /all command) — act on it, but keep any reply SHORT: the daemon aggregates all sessions\' replies into one summary, so reply only if you have a specific result worth surfacing and skip routine acknowledgements. Status pings (ready/error) fire automatically via the daemon and do not need a reply call.',
     });
     return;
   }
@@ -213,7 +219,7 @@ async function register() {
     const res = await fetch(`${DAEMON_BASE}/register`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ instance_id: instanceId, slug, cwd, pid: process.pid }),
+      body: JSON.stringify({ instance_id: instanceId, slug, cwd, pid: process.pid, accepts_broadcast: acceptsBroadcast }),
     });
     if (res.status === 401) {
       // Common case: the MCP started before the daemon, loadToken() returned
@@ -320,6 +326,7 @@ async function recvLoop() {
       injectChannelMessage(body.text, {
         imagePath: typeof body.image_path === 'string' ? body.image_path : undefined,
         voicePath: typeof body.voice_path === 'string' ? body.voice_path : undefined,
+        broadcast: body.broadcast === true,
       });
     }
   }
@@ -341,6 +348,10 @@ function injectChannelMessage(text, attachment = {}) {
   };
   if (attachment.imagePath) params.image_path = attachment.imagePath;
   if (attachment.voicePath) params.voice_path = attachment.voicePath;
+  // broadcast=true surfaces as a `broadcast="true"` attribute on the <channel>
+  // tag (the harness flattens meta keys to attributes), so the model can tell a
+  // /all fan-out from a directed message and keep its reply succinct.
+  if (attachment.broadcast) params.meta.broadcast = true;
   send({
     jsonrpc: '2.0',
     method: 'notifications/claude/channel',

@@ -33,8 +33,9 @@ The leading slash is optional on every command — `status` works the same as `/
 | `resume` | List recent Claude Code sessions per slug |
 | `resume <slug>` | List recent sessions for one slug |
 | `resume <slug> <uuid>` | Get a copyable `claude --resume <uuid>` command, or auto-launch via `BELFRY_RESUME_LAUNCHER` if set |
+| `/all <message>` | Broadcast to **every** registered session at once (slash required here). Each replies succinctly; the daemon threads them under your message and posts a `📋 Broadcast complete (N/N)` roll-up when all answer or a timeout fires. Sent as text the model interprets, not a slash command. Also available from a terminal as `belfry-broadcast "<message>"` with `--only a,b` / `--except c` filters. A session opts out with `BELFRY_BROADCAST=false`. |
 
-Slugs always win over nicknames on collision — a session literally named `ob` beats a nickname `ob`. Reserved names (`status`, `nick`, `unnick`, `nicks`, `help`, `resume`) cannot be used as nicknames.
+Slugs always win over nicknames on collision — a session literally named `ob` beats a nickname `ob`. Reserved names (`status`, `nick`, `unnick`, `nicks`, `help`, `resume`, `all`) cannot be used as nicknames.
 
 ## Inbound attachments
 
@@ -106,6 +107,8 @@ belfry is the inverse: outbound-only at first, then bidirectional, multi-termina
 | `BELFRY_TRANSCRIBE_KEY` | no | API key for inbound voice-note transcription. Voice messages get downloaded, transcribed via a Whisper-compatible endpoint, echoed back to the chat, and re-routed as if you'd typed the transcript. Without the key, voice notes are dropped with a one-line "voice support is off" reply so the absence is explicit, not silent. |
 | `BELFRY_TRANSCRIBE_PROVIDER` | no | `groq` (default — free tier, `whisper-large-v3-turbo`) or `openai` (`whisper-1`, paid). |
 | `BELFRY_REACT` | no | Routing-status emoji reactions, on by default: belfry reacts to each inbound message with one emoji the moment it routes — 👀 delivered to a live session, 🤷 slug known but no live session, 🤔 couldn't route — then swaps the 👀 to 🫡 once the session replies. Set to `0`/`off`/`false`/`no` to disable. Override the per-outcome emoji with `BELFRY_REACT_DELIVERED` / `BELFRY_REACT_DROPPED` / `BELFRY_REACT_UNMATCHED` / `BELFRY_REACT_REPLIED` (empty string disables just that one; must be from Telegram's free reaction set — which has no green check, so the "replied" default is 🫡). |
+| `BELFRY_BROADCAST` | no | Per-session opt-out for `/all` broadcasts. Set to `0`/`off`/`false`/`no` in a session's env to make it ignore fleet-wide messages. Default: receive them. |
+| `BELFRY_BROADCAST_TIMEOUT_MS` | no | How long the daemon waits for every session to answer a `/all` before posting the summary with non-responders listed. Default `120000` (2 min). |
 
 **No `ANTHROPIC_API_KEY` is needed.** The brain uses your Claude Code subscription via OAuth (the same credentials at `~/.claude/.credentials.json` that your interactive `claude` sessions use). For public-app users without a subscription: belfry runs without the brain — deterministic routes work, language routes return "language layer is down".
 

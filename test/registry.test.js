@@ -367,3 +367,69 @@ test('unknown brain endpoint returns 404', async () => {
     await reg.stop();
   }
 });
+
+// ── Broadcast (#30) ───────────────────────────────────────────────────────
+
+test('broadcast fans out to every registered instance and reports slugs', async () => {
+  await post('/register', { instance_id: 'b1', slug: 'alpha', cwd: '/a' });
+  await post('/register', { instance_id: 'b2', slug: 'beta', cwd: '/b' });
+  await post('/register', { instance_id: 'b3', slug: 'beta', cwd: '/b' }); // 2nd instance of beta
+  const { count, slugs } = registry.broadcast('fleet message');
+  assert.equal(count, 3, 'all three instances notified');
+  assert.deepEqual(slugs.sort(), ['alpha', 'beta'], 'distinct slugs reached');
+  // The queue item carries broadcast:true so the plugin can flag meta.broadcast.
+  const r = await (await fetch(`${baseUrl}/recv?instance_id=b1`)).json();
+  assert.deepEqual(r, { text: 'fleet message', broadcast: true });
+  for (const id of ['b1', 'b2', 'b3']) await post('/unregister', { instance_id: id });
+});
+
+test('broadcast skips instances that opted out (accepts_broadcast:false)', async () => {
+  await post('/register', { instance_id: 'in', slug: 'yes', cwd: '/y' });
+  await post('/register', { instance_id: 'out', slug: 'no', cwd: '/n', accepts_broadcast: false });
+  const { count, slugs } = registry.broadcast('hi');
+  assert.equal(count, 1);
+  assert.deepEqual(slugs, ['yes']);
+  for (const id of ['in', 'out']) await post('/unregister', { instance_id: id });
+});
+
+test('broadcast honors target_slugs and exclude_slugs filters', async () => {
+  await post('/register', { instance_id: 't1', slug: 'one', cwd: '/1' });
+  await post('/register', { instance_id: 't2', slug: 'two', cwd: '/2' });
+  await post('/register', { instance_id: 't3', slug: 'three', cwd: '/3' });
+  const only = registry.broadcast('x', { targetSlugs: ['one', 'three'] });
+  assert.deepEqual(only.slugs.sort(), ['one', 'three']);
+  const except = registry.broadcast('y', { excludeSlugs: ['two'] });
+  assert.deepEqual(except.slugs.sort(), ['one', 'three']);
+  for (const id of ['t1', 't2', 't3']) await post('/unregister', { instance_id: id });
+});
+
+test('POST /broadcast returns count + slugs (bare fan-out, no onBroadcast wired)', async () => {
+  await post('/register', { instance_id: 'h1', slug: 'p', cwd: '/p' });
+  await post('/register', { instance_id: 'h2', slug: 'q', cwd: '/q' });
+  const res = await post('/broadcast', { text: 'cli broadcast' });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.count, 2);
+  assert.deepEqual(body.slugs.sort(), ['p', 'q']);
+  for (const id of ['h1', 'h2']) await post('/unregister', { instance_id: id });
+});
+
+test('POST /broadcast delegates to onBroadcast when set', async () => {
+  const calls = [];
+  registry.setBroadcastHandler(async (args) => { calls.push(args); return { count: 7, slugs: ['mock'] }; });
+  const res = await post('/broadcast', { text: 'hi', target_slugs: ['a'], exclude_slugs: ['b'] });
+  const body = await res.json();
+  assert.equal(body.count, 7);
+  assert.deepEqual(body.slugs, ['mock']);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].source, 'cli');
+  assert.deepEqual(calls[0].targetSlugs, ['a']);
+  assert.deepEqual(calls[0].excludeSlugs, ['b']);
+  registry.setBroadcastHandler(null);
+});
+
+test('POST /broadcast rejects an empty body', async () => {
+  const res = await post('/broadcast', { text: '' });
+  assert.equal(res.status, 400);
+});

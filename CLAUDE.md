@@ -53,6 +53,7 @@ bin/belfry.js              — daemon entry point + daemon loop
 bin/belfry-mcp.js          — per-session MCP plugin (registers, recv-loop, inject, reply tool)
 bin/belfry-hook.js         — Claude Code hook that writes the /tmp/claude-dashboard/ convention
 bin/belfry-install-hook.js — adds belfry-hook to .claude/settings.json with writer detection
+bin/belfry-broadcast.js    — local CLI: fan one message out to every session (POST /broadcast)
 lib/watcher.js             — chokidar watcher on /tmp/claude-dashboard/*.json
 lib/composer.js            — 3-line mobile-friendly message builder
 lib/telegram.js            — Bot API HTTP helper (sendMessage)
@@ -61,7 +62,8 @@ lib/config.js              — load + validate ~/.claude/belfry.jsonc
 lib/reply-tracker.js       — outbound message_id → slug LRU
 lib/router.js              — incoming Telegram update → (slug, text, messageId)
 lib/poller.js              — Telegram getUpdates long-poll loop
-lib/registry.js            — HTTP register/unregister/recv/send + pending-reply tracking
+lib/registry.js            — HTTP register/unregister/recv/send/broadcast + pending-reply tracking
+lib/broadcast-tracker.js   — in-flight /all completion tracking (all-replied or timeout → summary)
 lib/slug.js                — slug derivation per docs/CONVENTION.md
 lib/voice.js               — inbound Telegram voice-note transcription (Whisper via Groq/OpenAI)
 docs/CONVENTION.md         — shared local-machine convention spec
@@ -88,6 +90,8 @@ test/                      — node --test
 2. Auto-reply: when a Telegram message routes in, the daemon marks the slug as "owes a reply." On the next status flip to `ready` for that slug with a fresh `last_response`, the daemon sends `last_response` quote-replied to the originating message and clears the marker. Auto-reply is independent of subscriptions and throttle — it serves the conversational thread, not the event-ping channel.
 
 **Why this works for active and idle sessions.** The MCP transport is alive for the entire lifetime of the session — active, mid-tool-call, idle waiting for input, all the same. There is no "session is between turns, the inbox can't drain" case (the v1 Stop-hook problem) and no "session has no terminal, spawn a parallel one" case (the v1 spawn problem). The plugin is *in* the session; the channel notification is the same path the user's keyboard would go through.
+
+**Broadcast (#30).** `/all <message>` (Telegram, slash required) and `belfry-broadcast "<message>"` (local CLI, `--only`/`--except` filters) fan one message out to *every* registered session via `registry.broadcast()`. What each session receives is **text it interprets, not a slash command** — channel injection wraps content in a `<channel>` tag so Claude Code's slash parser never runs it (`/all /compress` injects the literal text "/compress"). The queue item carries `broadcast:true`, surfaced as `broadcast="true"` on the channel tag so the model knows it's a fan-out and replies succinctly. A session opts out with `BELFRY_BROADCAST=false` (reported as `accepts_broadcast:false` at register; the registry skips it). The daemon's `onBroadcast` orchestrator (in `bin/belfry.js`, shared by the poller and the `/broadcast` route) anchors threading on a single message — the user's `/all` for Telegram, a placeholder confirmation for CLI — `markOwesReply`s every reached slug to it (so all replies thread under it and the 👀 swaps to 🫡), seeds `lib/broadcast-tracker.js`, and posts a `📡 broadcast to N session(s)` confirmation. The tracker collects each reply (tapped in `sendOutbound`) and fires a `📋 Broadcast complete (N/N)` roll-up when every session answers or `BELFRY_BROADCAST_TIMEOUT_MS` (default 2m) elapses. The `target_slugs`/`exclude_slugs` filter shape is forward-compatible with #29's per-host filtering.
 
 ## Subscription config (`~/.claude/belfry.jsonc`)
 
@@ -125,6 +129,8 @@ Slug derivation order (see `lib/slug.js` and `docs/CONVENTION.md`): `CLAUDE_SESS
 | `BELFRY_TRANSCRIBE_PROVIDER` | no | `groq` (default) or `openai`. Both speak Whisper's `audio/transcriptions` shape — provider is just an endpoint + default model swap. |
 | `BELFRY_REACT` | no | Routing-status emoji reactions (#32), on by default. Set to a falsy value (`0`/`off`/`false`/`no`) to disable the whole feature. |
 | `BELFRY_REACT_DELIVERED` / `BELFRY_REACT_DROPPED` / `BELFRY_REACT_UNMATCHED` / `BELFRY_REACT_REPLIED` | no | Override the per-outcome emoji (defaults 👀 / 🤷 / 🤔 / 🫡). Set one to an empty string to disable just that outcome. `REPLIED` is the 🫡 that the inbound's 👀 swaps to once the session answers. Must be from Telegram's free reaction set (~70 emoji) — note that set has **no green check** (✅/✔️ both 400 with REACTION_INVALID), which is why the replied default is a salute, not a checkmark. |
+| `BELFRY_BROADCAST` | no | Per-session broadcast opt-out (#30), read by `belfry-mcp`. Set to a falsy value (`0`/`off`/`false`/`no`) to make this session decline `/all` fan-outs (reported as `accepts_broadcast:false` at register). Default: accept. |
+| `BELFRY_BROADCAST_TIMEOUT_MS` | no | How long the daemon waits for all sessions to reply to a `/all` before posting the roll-up with the non-responders listed. Default `120000` (2 min). |
 
 The conversational agent + summarizer run inside a long-running `claude --print --input-format=stream-json` subprocess (the "brain"; see `lib/brain.js`) that uses the user's Claude.ai subscription via OAuth — no `ANTHROPIC_API_KEY` needed. Without claude on PATH or without subscription credentials, the brain simply doesn't start; deterministic routes still work and language-layer routes return "language layer is down".
 

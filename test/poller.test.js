@@ -899,3 +899,50 @@ test('reaction: deliver() throwing still surfaces 🤷 (not silence)', async () 
   assert.equal(reactions[0].reaction[0].emoji, '🤷', 'fanout 0 → dropped');
   assert.ok(logs.some((m) => /deliver failed/.test(m)), 'the throw is logged, not swallowed silently');
 });
+
+// ── Broadcast dispatch (#30) ──────────────────────────────────────────────
+
+test('broadcast: dispatches to onBroadcast and reacts 👀 when sessions reached', async () => {
+  const updates = [{ update_id: 1000, message: { message_id: 50, chat: { id: CHAT }, text: '/all wrap up' } }];
+  const reactions = [];
+  const calls = [];
+  const poller = new Poller({
+    botToken: 'TOKEN', expectedChatId: CHAT, replyTracker: new ReplyTracker(),
+    target: reactTarget(1), reactEmoji: REACT, fetchFn: reactionFetch(updates, reactions),
+    onBroadcast: async (args) => { calls.push(args); return { count: 3, slugs: ['a', 'b', 'c'] }; },
+  });
+  await poller.tick();
+  await flush();
+  assert.deepEqual(calls[0], { text: 'wrap up', messageId: 50, source: 'telegram' });
+  assert.equal(reactions.length, 1);
+  assert.equal(reactions[0].reaction[0].emoji, '👀');
+  assert.equal(reactions[0].message_id, 50);
+});
+
+test('broadcast: reacts 🤷 when no sessions are registered (count 0)', async () => {
+  const updates = [{ update_id: 1001, message: { message_id: 51, chat: { id: CHAT }, text: '/all hi' } }];
+  const reactions = [];
+  const poller = new Poller({
+    botToken: 'TOKEN', expectedChatId: CHAT, replyTracker: new ReplyTracker(),
+    target: reactTarget(1), reactEmoji: REACT, fetchFn: reactionFetch(updates, reactions),
+    onBroadcast: async () => ({ count: 0, slugs: [] }),
+  });
+  await poller.tick();
+  await flush();
+  assert.equal(reactions.length, 1);
+  assert.equal(reactions[0].reaction[0].emoji, '🤷');
+});
+
+test('broadcast: no handler wired → logs and drops', async () => {
+  const updates = [{ update_id: 1002, message: { message_id: 52, chat: { id: CHAT }, text: '/all hi' } }];
+  const logs = [];
+  const target = reactTarget(1);
+  const poller = new Poller({
+    botToken: 'TOKEN', expectedChatId: CHAT, replyTracker: new ReplyTracker(),
+    target, fetchFn: reactionFetch(updates, []), log: (m) => logs.push(m),
+  });
+  await poller.tick();
+  await flush();
+  assert.equal(target.delivered.length, 0);
+  assert.ok(logs.some((m) => /broadcast dropped/.test(m)));
+});

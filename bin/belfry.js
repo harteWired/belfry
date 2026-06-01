@@ -10,7 +10,7 @@ import { StatusWatcher } from '../lib/watcher.js';
 import { Throttle } from '../lib/throttle.js';
 import { Digest } from '../lib/digest.js';
 import { compose } from '../lib/composer.js';
-import { sendMessage, setMessageReaction } from '../lib/telegram.js';
+import { sendMessage, setMessageReaction, editMessageText } from '../lib/telegram.js';
 import { ReplyTracker } from '../lib/reply-tracker.js';
 import { Registry } from '../lib/registry.js';
 import { Poller } from '../lib/poller.js';
@@ -36,6 +36,8 @@ import { chunkParagraphAware } from '../lib/chunk.js';
 import { makeVoiceHandler } from '../lib/voice.js';
 import { PingDedup } from '../lib/ping-dedup.js';
 import { resolveReactionConfig } from '../lib/reactions.js';
+import { BroadcastTracker, DEFAULT_BROADCAST_TIMEOUT_MS } from '../lib/broadcast-tracker.js';
+import { buildBroadcastSummary } from '../lib/broadcast-summary.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -146,6 +148,34 @@ async function main() {
     log(`reactions on (delivered=${reactEmoji.delivered ?? '-'} dropped=${reactEmoji.dropped ?? '-'} unmatched=${reactEmoji.unmatched ?? '-'} replied=${reactEmoji.replied ?? '-'})`);
   }
 
+  // Broadcast completion tracking (#30). When a /all fans out, each reached
+  // session is instructed to answer succinctly; the tracker collects those
+  // replies (tapped in sendOutbound below) and fires `onComplete` once every
+  // session has answered OR a timeout elapses — at which point the daemon
+  // posts an aggregated roll-up threaded under the broadcast.
+  // A non-positive / unparseable override falls back to the default (and an
+  // explicit 0 can't accidentally disable the timeout, which would leak
+  // trackers forever).
+  const broadcastTimeoutOverride = Number(process.env.BELFRY_BROADCAST_TIMEOUT_MS);
+  const BROADCAST_TIMEOUT_MS = broadcastTimeoutOverride > 0 ? broadcastTimeoutOverride : DEFAULT_BROADCAST_TIMEOUT_MS;
+  if (BROADCAST_TIMEOUT_MS !== DEFAULT_BROADCAST_TIMEOUT_MS) {
+    log(`broadcast: completion timeout overridden to ${BROADCAST_TIMEOUT_MS}ms`);
+  }
+  async function sendBroadcastSummary({ messageId, expected, responses, missing, timedOut }) {
+    await sendMessage({
+      botToken, chatId,
+      text: buildBroadcastSummary({ expected, responses, missing, timedOut }),
+      forumTopicId: forumTopicId || null,
+      replyToMessageId: messageId,
+    });
+  }
+  const broadcastTracker = new BroadcastTracker({
+    defaultTimeoutMs: BROADCAST_TIMEOUT_MS,
+    onComplete: (result) => {
+      sendBroadcastSummary(result).catch((err) => log(`broadcast summary failed (msg ${result.messageId}): ${err.message}`));
+    },
+  });
+
   // Resolve the topic to send a slug's outbound messages into. Per-slug
   // subscription override → BELFRY_FORUM_TOPIC_ID env fallback → main chat.
   const topicForSlug = (slug) => topicFor(config, slug) ?? (forumTopicId || null);
@@ -222,6 +252,13 @@ async function main() {
       setMessageReaction({ botToken, chatId, messageId: replyToMessageId, emoji: reactEmoji.replied })
         .catch((err) => log(`reaction swap failed (msg ${replyToMessageId}): ${err.message}`));
     }
+    // If this reply answers an in-flight broadcast (its originating message is
+    // the broadcast anchor), record it toward the completion roll-up. The
+    // individual reply still goes out — the summary is additive, not a
+    // replacement. record() is a cheap no-op for non-broadcast replies.
+    if (typeof replyToMessageId === 'number' && replyToMessageId > 0) {
+      broadcastTracker.record(replyToMessageId, slug, text);
+    }
     return { message_id: result?.message_id };
   };
 
@@ -264,6 +301,56 @@ async function main() {
 
   const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound });
   await registry.start();
+
+  // Broadcast orchestrator (#30). Shared by the Telegram `/all` path (poller)
+  // and the local CLI (`POST /broadcast` → bin/belfry-broadcast.js). Fans the
+  // text out to every registered session, threads each session's reply under a
+  // single anchor message, seeds the completion tracker, and posts a
+  // confirmation. Returns { count, slugs } for the caller.
+  //
+  // The anchor is the user's `/all` message for the Telegram path; CLI
+  // broadcasts have no originating message, so we send a placeholder
+  // confirmation first and use its id as the anchor (edited with the real
+  // count after fan-out). broadcast() + markOwesReply + tracker.start run
+  // synchronously after any anchor-establishing await, so no session reply can
+  // be processed before the threading + tracker are in place.
+  const onBroadcast = async ({ text, targetSlugs = null, excludeSlugs = null, messageId = null, source = 'telegram' }) => {
+    let anchorId = messageId;
+    let cliPlaceholder = false;
+    if (!anchorId) {
+      try {
+        const r = await sendMessage({ botToken, chatId, text: '📡 broadcasting…', forumTopicId: forumTopicId || null });
+        anchorId = r?.message_id ?? null;
+        cliPlaceholder = true;
+      } catch (err) {
+        log(`broadcast: placeholder send failed: ${err.message}`);
+      }
+    }
+    const { count, slugs } = registry.broadcast(text, { targetSlugs, excludeSlugs });
+    if (anchorId && count > 0) {
+      // markOwesReply overwrites any prior pending marker for the slug, so a
+      // session mid-directed-turn that's caught in a broadcast will thread its
+      // next reply under the broadcast anchor (the "fresher inbound supersedes"
+      // contract). Acceptable: the broadcast is the newest inbound.
+      for (const slug of slugs) registry.markOwesReply(slug, anchorId);
+      broadcastTracker.start(anchorId, { expectedSlugs: slugs, timeoutMs: BROADCAST_TIMEOUT_MS });
+    }
+    const confirm = count > 0
+      ? `📡 broadcast to ${count} session(s): ${slugs.join(', ')}`
+      : '📡 broadcast — no sessions registered';
+    try {
+      if (cliPlaceholder && anchorId) {
+        await editMessageText({ botToken, chatId, messageId: anchorId, text: confirm });
+      } else {
+        await sendMessage({ botToken, chatId, text: confirm, forumTopicId: forumTopicId || null, replyToMessageId: anchorId ?? undefined });
+      }
+    } catch (err) {
+      log(`broadcast: confirmation failed: ${err.message}`);
+    }
+    log(`broadcast (${source}) → ${count} session(s): ${slugs.join(', ') || '—'}${anchorId ? `, anchor ${anchorId}` : ''}`);
+    return { count, slugs };
+  };
+  registry.setBroadcastHandler(onBroadcast);
 
   // Watcher is created later (after we know the digest flush + onUpdate
   // callbacks), but the nickname registry and agent handler both need to
@@ -469,6 +556,7 @@ async function main() {
     onResumeRequest: resumeHandler,
     onUnmatched: agentHandler,
     onFullExpand: fullExpandHandler,
+    onBroadcast,
     resolveNickname: (token) => nicknames.resolve(token),
     resolveTopic: (id) => topicMap.get(id) ?? null,
     hasFullStash: (msgId) => oversizeCache.has(msgId),

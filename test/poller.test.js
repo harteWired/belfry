@@ -749,3 +749,153 @@ test('voice: chat-id mismatch skips voice handler entirely', async () => {
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(handlerCalled, false, 'foreign chat must not touch the transcribe API');
 });
+
+// ── Routing-status emoji reactions (#32) ──────────────────────────────────
+
+const REACT = { delivered: '👀', dropped: '🤷', unmatched: '🤔' };
+
+/**
+ * Fetch fake that routes by URL: getUpdates returns `updates` once (then an
+ * empty backlog), setMessageReaction pushes its parsed body to `reactions`.
+ * `onReact` lets a test make the reaction call throw.
+ */
+function reactionFetch(updates, reactions, { onReact } = {}) {
+  let served = false;
+  return async (url, opts) => {
+    if (/\/setMessageReaction$/.test(url)) {
+      if (onReact) return onReact();
+      reactions.push(JSON.parse(opts.body));
+      return { ok: true, json: async () => ({ ok: true, result: true }) };
+    }
+    const result = served ? [] : updates;
+    served = true;
+    return { ok: true, json: async () => ({ ok: true, result }) };
+  };
+}
+
+function reactTarget(fanout) {
+  const delivered = [];
+  return {
+    delivered,
+    deliver(slug, text) { delivered.push({ slug, text }); return fanout; },
+    knownSlugs() { return new Set(['life-planner']); },
+  };
+}
+
+// Reactions are fire-and-forget; give the microtask + setMessageReaction call
+// a tick to land before asserting.
+const flush = () => new Promise((r) => setTimeout(r, 10));
+
+test('reaction: 👀 on delivery to a live session', async () => {
+  const updates = [{ update_id: 900, message: { message_id: 91, chat: { id: CHAT }, text: '/life-planner go' } }];
+  const reactions = [];
+  const poller = new Poller({
+    botToken: 'TOKEN', expectedChatId: CHAT, replyTracker: new ReplyTracker(),
+    target: reactTarget(1), reactEmoji: REACT, fetchFn: reactionFetch(updates, reactions),
+  });
+  await poller.tick();
+  await flush();
+  assert.equal(reactions.length, 1);
+  assert.deepEqual(reactions[0], { chat_id: CHAT, message_id: 91, reaction: [{ type: 'emoji', emoji: '👀' }] });
+});
+
+test('reaction: 🤷 when slug is known but no live session (fanout 0)', async () => {
+  const updates = [{ update_id: 901, message: { message_id: 92, chat: { id: CHAT }, text: '/life-planner go' } }];
+  const reactions = [];
+  const poller = new Poller({
+    botToken: 'TOKEN', expectedChatId: CHAT, replyTracker: new ReplyTracker(),
+    target: reactTarget(0), reactEmoji: REACT, fetchFn: reactionFetch(updates, reactions),
+  });
+  await poller.tick();
+  await flush();
+  assert.equal(reactions.length, 1);
+  assert.equal(reactions[0].reaction[0].emoji, '🤷');
+  assert.equal(reactions[0].message_id, 92);
+});
+
+test('reaction: 🤔 on unmatched (fires even with no agent wired)', async () => {
+  const updates = [{ update_id: 902, message: { message_id: 93, chat: { id: CHAT }, text: 'just chatting' } }];
+  const reactions = [];
+  const poller = new Poller({
+    botToken: 'TOKEN', expectedChatId: CHAT, replyTracker: new ReplyTracker(),
+    target: reactTarget(1), reactEmoji: REACT, fetchFn: reactionFetch(updates, reactions),
+    // no onUnmatched
+  });
+  await poller.tick();
+  await flush();
+  assert.equal(reactions.length, 1);
+  assert.equal(reactions[0].reaction[0].emoji, '🤔');
+  assert.equal(reactions[0].message_id, 93);
+});
+
+test('reaction: disabled (reactEmoji null) fires nothing', async () => {
+  const updates = [{ update_id: 903, message: { message_id: 94, chat: { id: CHAT }, text: '/life-planner go' } }];
+  const reactions = [];
+  const poller = new Poller({
+    botToken: 'TOKEN', expectedChatId: CHAT, replyTracker: new ReplyTracker(),
+    target: reactTarget(1), fetchFn: reactionFetch(updates, reactions), // reactEmoji defaults null
+  });
+  await poller.tick();
+  await flush();
+  assert.equal(reactions.length, 0);
+});
+
+test('reaction: a per-state null emoji suppresses just that outcome', async () => {
+  const updates = [{ update_id: 904, message: { message_id: 95, chat: { id: CHAT }, text: '/life-planner go' } }];
+  const reactions = [];
+  const poller = new Poller({
+    botToken: 'TOKEN', expectedChatId: CHAT, replyTracker: new ReplyTracker(),
+    target: reactTarget(0), reactEmoji: { ...REACT, dropped: null }, fetchFn: reactionFetch(updates, reactions),
+  });
+  await poller.tick();
+  await flush();
+  assert.equal(reactions.length, 0, 'dropped reaction disabled → no call');
+});
+
+test('reaction: reserved commands (/status) are never reacted', async () => {
+  const updates = [{ update_id: 905, message: { message_id: 96, chat: { id: CHAT }, text: '/status' } }];
+  const reactions = [];
+  const poller = new Poller({
+    botToken: 'TOKEN', expectedChatId: CHAT, replyTracker: new ReplyTracker(),
+    target: reactTarget(1), reactEmoji: REACT, fetchFn: reactionFetch(updates, reactions),
+    onStatusRequest: async () => {},
+  });
+  await poller.tick();
+  await flush();
+  assert.equal(reactions.length, 0);
+});
+
+test('reaction: a failing reaction is swallowed and never blocks delivery', async () => {
+  const updates = [{ update_id: 906, message: { message_id: 97, chat: { id: CHAT }, text: '/life-planner go' } }];
+  const target = reactTarget(1);
+  const logs = [];
+  const poller = new Poller({
+    botToken: 'TOKEN', expectedChatId: CHAT, replyTracker: new ReplyTracker(),
+    target, reactEmoji: REACT, log: (m) => logs.push(m),
+    fetchFn: reactionFetch(updates, [], { onReact: () => { throw new Error('rate limited'); } }),
+  });
+  await poller.tick();
+  await flush();
+  assert.deepEqual(target.delivered, [{ slug: 'life-planner', text: 'go' }], 'delivery still happened');
+  assert.ok(logs.some((m) => /reaction failed/.test(m)), 'failure logged, not thrown');
+});
+
+test('reaction: deliver() throwing still surfaces 🤷 (not silence)', async () => {
+  const updates = [{ update_id: 907, message: { message_id: 98, chat: { id: CHAT }, text: '/life-planner go' } }];
+  const reactions = [];
+  const logs = [];
+  const throwingTarget = {
+    deliver() { throw new Error('registry exploded'); },
+    knownSlugs() { return new Set(['life-planner']); },
+  };
+  const poller = new Poller({
+    botToken: 'TOKEN', expectedChatId: CHAT, replyTracker: new ReplyTracker(),
+    target: throwingTarget, reactEmoji: REACT, log: (m) => logs.push(m),
+    fetchFn: reactionFetch(updates, reactions),
+  });
+  await poller.tick();
+  await flush();
+  assert.equal(reactions.length, 1, 'a reaction still fires despite the deliver throw');
+  assert.equal(reactions[0].reaction[0].emoji, '🤷', 'fanout 0 → dropped');
+  assert.ok(logs.some((m) => /deliver failed/.test(m)), 'the throw is logged, not swallowed silently');
+});

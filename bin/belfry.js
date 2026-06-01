@@ -35,6 +35,7 @@ import { packForTelegram } from '../lib/pack.js';
 import { chunkParagraphAware } from '../lib/chunk.js';
 import { makeVoiceHandler } from '../lib/voice.js';
 import { PingDedup } from '../lib/ping-dedup.js';
+import { resolveReactionConfig } from '../lib/reactions.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -430,11 +431,20 @@ async function main() {
     log('voice transcription disabled (BELFRY_TRANSCRIBE_KEY not set) — voice notes will be acknowledged but dropped');
   }
 
+  // Routing-status emoji reactions (#32): 👀 delivered / 🤷 dropped / 🤔
+  // unmatched, fired on the inbound message the moment routing resolves.
+  // Resolved from env (default on); see lib/reactions.js.
+  const reactEmoji = resolveReactionConfig(process.env);
+  if (reactEmoji) {
+    log(`reactions on (delivered=${reactEmoji.delivered ?? '-'} dropped=${reactEmoji.dropped ?? '-'} unmatched=${reactEmoji.unmatched ?? '-'})`);
+  }
+
   const poller = new Poller({
     botToken,
     expectedChatId: Number(chatId),
     replyTracker,
     target: registry,
+    reactEmoji,
     onStatusRequest: statusHandler,
     onNickRequest: nickHandler,
     onHelpRequest: helpHandler,

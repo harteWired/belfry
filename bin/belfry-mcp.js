@@ -106,7 +106,7 @@ function handleMessage(msg) {
         },
       },
       instructions:
-        'Messages routed via belfry arrive as user input. They originate from Telegram replies the sender quoted to a belfry message. The sender reads Telegram, not this terminal — anything you want them to see must go through the reply tool. Status pings (ready/error) fire automatically via the daemon and do not need a reply call.',
+        'Belfry messages arrive as user input wrapped in a <channel source="belfry" ...> tag; they originate from Telegram replies the sender quoted to a belfry message. Input typed directly into the terminal carries NO such tag. The reply tool sends text to the sender\'s phone over Telegram, and is valid ONLY on a turn whose inbound message was belfry-tagged. When the current turn came from the terminal (no <channel source="belfry"> tag), answer in the terminal and do NOT call reply — pushing terminal-origin answers to Telegram is noise. The terminal is the canonical full transcript: whenever you DO reply to Telegram, also render the full response as normal terminal text, so the terminal never carries less than what went to the phone. Status pings (ready/error) fire automatically via the daemon and do not need a reply call.',
     });
     return;
   }
@@ -121,7 +121,7 @@ function handleMessage(msg) {
         {
           name: 'reply',
           description:
-            'Send a message back to the originating Telegram chat for this session. Use to reply to the human who sent the inbound Telegram message that triggered the current turn. Threads as a quote-reply to that message automatically.',
+            'Send a message back to the originating Telegram chat for this session. Call this ONLY on a turn whose inbound was a belfry <channel source="belfry"> message — for terminal-origin turns (no such tag), answer in the terminal and do not call reply. Always also render the full reply text as terminal output; the terminal must never carry less than what goes to Telegram. Threads as a quote-reply to the originating message automatically.',
           inputSchema: {
             type: 'object',
             properties: {

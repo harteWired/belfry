@@ -53,6 +53,7 @@ bin/belfry.js              — daemon entry point + daemon loop
 bin/belfry-mcp.js          — per-session MCP plugin (registers, recv-loop, inject, reply tool)
 bin/belfry-hook.js         — Claude Code hook that writes the /tmp/claude-dashboard/ convention
 bin/belfry-install-hook.js — adds belfry-hook to .claude/settings.json with writer detection
+bin/belfry-broadcast.js    — local CLI: fan one message out to every session (POST /broadcast)
 lib/watcher.js             — chokidar watcher on /tmp/claude-dashboard/*.json
 lib/composer.js            — 3-line mobile-friendly message builder
 lib/telegram.js            — Bot API HTTP helper (sendMessage)
@@ -61,8 +62,10 @@ lib/config.js              — load + validate ~/.claude/belfry.jsonc
 lib/reply-tracker.js       — outbound message_id → slug LRU
 lib/router.js              — incoming Telegram update → (slug, text, messageId)
 lib/poller.js              — Telegram getUpdates long-poll loop
-lib/registry.js            — HTTP register/unregister/recv/send + pending-reply tracking
+lib/registry.js            — HTTP register/unregister/recv/send/broadcast + pending-reply tracking
+lib/broadcast-tracker.js   — in-flight /all completion tracking (all-replied or timeout → summary)
 lib/slug.js                — slug derivation per docs/CONVENTION.md
+lib/voice.js               — inbound Telegram voice-note transcription (Whisper via Groq/OpenAI)
 docs/CONVENTION.md         — shared local-machine convention spec
 docs/install-mcp.md        — how to add belfry-mcp to a project
 test/                      — node --test
@@ -78,14 +81,18 @@ test/                      — node --test
    1. Primary: Telegram quote-reply. Every outbound belfry message records its `message_id → slug`; replying to one binds the message to that slug.
    2. Fallback: `/<slug-name> message body` for cold sends with no message to quote.
    3. Unrouteable messages (no quote, no recognized prefix) → log + ignore. Don't guess.
+   4. **Routing-status reaction (#32).** The daemon reacts to the inbound message with one emoji the moment routing resolves, as a pre-reply ack: 👀 delivered to a live session, 🤷 slug known but no live session registered (the message went nowhere), 🤔 unmatched (no deterministic route). When the session then answers, `sendOutbound` swaps the originating message's 👀 → 🫡 ("replied") — driven by the registry's owes-reply marker, which is set only for delivered inbounds, so 🤷/🤔 messages never receive a ✅. Fire-and-forget — a failed reaction never blocks delivery. Reserved commands (`/status`, `/nick`, …) aren't reacted; they already produce text. Policy + env config in `lib/reactions.js`; the `setMessageReaction` call lives in `lib/telegram.js`; the inbound react is wired in `lib/poller.js`'s router dispatch, the ✅ swap in `bin/belfry.js`'s `sendOutbound`. A reaction carries no text, so it signals the routing *outcome*, not the destination slug (that rides on the `<slug>:` reply header).
+      **Brain-route upgrade (#34).** 🤔 is the *deterministic* router's outcome — "I couldn't place this." But an unmatched message is then handed to the brain (`onUnmatched` → `agent-handler` → `lib/brain-handlers.js`), which may classify it and `deliver` to a real slug. When it does, the `deliver` handler upgrades the originating reaction to reflect the *full* pipeline: 👀 if a live session got it, 🤷 if the slug resolved but nothing was registered — so 🤔 only persists when the brain also declines. The upgrade rides an injected `reactRouting(messageId, outcome)` callback (wired in `bin/belfry.js`, mirroring the poller's `reactToRouting`; null when reactions are off), and the 👀→🫡 reply-swap then fires normally because `registry.deliver` set the owes-reply marker on the originating message.
 
 **Session ↔ slug binding.** belfry-mcp derives its own slug at startup via `lib/slug.js` per the shared convention (`CLAUDE_SESSION_SLUG` → `CLAUDELIKE_BAR_NAME` → `~/.claude/claude-session-slugs.json` → `~/.claude/claudelike-bar-paths.json` → cwd basename) and reports it on register. The daemon never has to guess which session a slug refers to.
 
 **Outbound from session.** Two paths the model can use:
-1. Explicit `reply` MCP tool from `belfry-mcp` → POST `/send` on the registry → daemon calls `sendMessage` and quote-replies the originating Telegram message (or the slug's most recent outbound message if no inbound is pending).
+1. Explicit `reply` MCP tool from `belfry-mcp` → POST `/send` on the registry → daemon calls `sendMessage` and quote-replies the originating Telegram message (or the slug's most recent outbound message if no inbound is pending). **Provenance rule (#33):** the `reply` tool pushes to the sender's phone and is valid *only* on a turn whose inbound was a belfry `<channel source="belfry">` message. Terminal-typed input carries no such tag — answering it via `reply` pushes terminal-origin output to Telegram as noise. The terminal is the canonical full transcript: whenever the model replies to Telegram it must also render the full text as terminal output, so the terminal never carries less than what went to the phone. This contract lives in the MCP server `instructions` + the `reply` tool description in `bin/belfry-mcp.js`.
 2. Auto-reply: when a Telegram message routes in, the daemon marks the slug as "owes a reply." On the next status flip to `ready` for that slug with a fresh `last_response`, the daemon sends `last_response` quote-replied to the originating message and clears the marker. Auto-reply is independent of subscriptions and throttle — it serves the conversational thread, not the event-ping channel.
 
 **Why this works for active and idle sessions.** The MCP transport is alive for the entire lifetime of the session — active, mid-tool-call, idle waiting for input, all the same. There is no "session is between turns, the inbox can't drain" case (the v1 Stop-hook problem) and no "session has no terminal, spawn a parallel one" case (the v1 spawn problem). The plugin is *in* the session; the channel notification is the same path the user's keyboard would go through.
+
+**Broadcast (#30).** `/all <message>` (Telegram, slash required) and `belfry-broadcast "<message>"` (local CLI, `--only`/`--except` filters) fan one message out to *every* registered session via `registry.broadcast()`. What each session receives is **text it interprets, not a slash command** — channel injection wraps content in a `<channel>` tag so Claude Code's slash parser never runs it (`/all /compress` injects the literal text "/compress"). The queue item carries `broadcast:true`, surfaced as `broadcast="true"` on the channel tag so the model knows it's a fan-out and replies succinctly. A session opts out with `BELFRY_BROADCAST=false` (reported as `accepts_broadcast:false` at register; the registry skips it). The daemon's `onBroadcast` orchestrator (in `bin/belfry.js`, shared by the poller and the `/broadcast` route) anchors threading on a single message — the user's `/all` for Telegram, a placeholder confirmation for CLI — `markOwesReply`s every reached slug to it (so all replies thread under it and the 👀 swaps to 🫡), seeds `lib/broadcast-tracker.js`, and posts a `📡 broadcast to N session(s)` confirmation. The tracker collects each reply (tapped in `sendOutbound`) and fires a `📋 Broadcast complete (N/N)` roll-up when every session answers or `BELFRY_BROADCAST_TIMEOUT_MS` (default 2m) elapses. The `target_slugs`/`exclude_slugs` filter shape is forward-compatible with #29's per-host filtering.
 
 ## Subscription config (`~/.claude/belfry.jsonc`)
 
@@ -115,14 +122,25 @@ Slug derivation order (see `lib/slug.js` and `docs/CONVENTION.md`): `CLAUDE_SESS
 |---|---|---|
 | `BELFRY_TOKEN` | yes | Bot token from @BotFather |
 | `BELFRY_CHAT_ID` | yes | Numeric chat ID where messages should land |
-| `BELFRY_FORUM_TOPIC_ID` | no | Forum topic ID, if posting to a Forum group's topic |
+| `BELFRY_FORUM_TOPIC_ID` | no | Default forum topic ID; per-slug `topic` in belfry.jsonc takes precedence |
 | `BELFRY_MCP_PORT` | no | Override default MCP port (default `49876`, in the IANA dynamic range) |
+| `BELFRY_RESUME_LAUNCHER` | no | Optional script for `/resume <slug> <uuid>` to exec as a detached subprocess. Without it, `/resume` emits a copyable command. |
+| `BELFRY_STATE_DIR` | no | Override the state directory (default `$XDG_STATE_HOME/belfry` or `~/.local/state/belfry`). |
+| `BELFRY_TRANSCRIBE_KEY` | no | API key for inbound voice-note transcription. Without it, voice notes are acknowledged once with a "voice support is off" reply and dropped. |
+| `BELFRY_TRANSCRIBE_PROVIDER` | no | `groq` (default) or `openai`. Both speak Whisper's `audio/transcriptions` shape — provider is just an endpoint + default model swap. |
+| `BELFRY_REACT` | no | Routing-status emoji reactions (#32), on by default. Set to a falsy value (`0`/`off`/`false`/`no`) to disable the whole feature. |
+| `BELFRY_REACT_DELIVERED` / `BELFRY_REACT_DROPPED` / `BELFRY_REACT_UNMATCHED` / `BELFRY_REACT_REPLIED` | no | Override the per-outcome emoji (defaults 👀 / 🤷 / 🤔 / 🫡). Set one to an empty string to disable just that outcome. `REPLIED` is the 🫡 that the inbound's 👀 swaps to once the session answers. Must be from Telegram's free reaction set (~70 emoji) — note that set has **no green check** (✅/✔️ both 400 with REACTION_INVALID), which is why the replied default is a salute, not a checkmark. |
+| `BELFRY_BROADCAST` | no | Per-session broadcast opt-out (#30), read by `belfry-mcp`. Set to a falsy value (`0`/`off`/`false`/`no`) to make this session decline `/all` fan-outs (reported as `accepts_broadcast:false` at register). Default: accept. |
+| `BELFRY_BROADCAST_TIMEOUT_MS` | no | How long the daemon waits for all sessions to reply to a `/all` before posting the roll-up with the non-responders listed. Default `120000` (2 min). |
+
+The conversational agent + summarizer run inside a long-running `claude --print --input-format=stream-json` subprocess (the "brain"; see `lib/brain.js`) that uses the user's Claude.ai subscription via OAuth — no `ANTHROPIC_API_KEY` needed. Without claude on PATH or without subscription credentials, the brain simply doesn't start; deterministic routes still work and language-layer routes return "language layer is down".
 
 ## Privacy
 
 1. No prompt or response text is logged to stderr — only event metadata (slug, status, timestamps).
 2. Bot token + chat ID are passed as env vars only — no on-disk config inside the project.
 3. Inbound: only messages from `BELFRY_CHAT_ID` are accepted. Telegram replies from any other chat are dropped silently. Don't introduce a whitelist of additional chat IDs without a real reason — single-user is the design.
+4. Voice notes only leave the host when `BELFRY_TRANSCRIBE_KEY` is set — the daemon downloads the audio to the attachment dir and POSTs it to the configured Whisper provider (Groq by default). Without the key, voice notes are dropped without any network call past Telegram. Treat the key as opt-in for an additional egress destination, not as a quality-of-life toggle.
 
 ## Setup
 

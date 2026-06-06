@@ -46,6 +46,12 @@ const cwd = process.cwd();
 const slug = deriveSlug({ cwd, env: process.env });
 const instanceId = randomUUID();
 
+// Broadcast opt-out (#30): BELFRY_BROADCAST=0/off/false/no makes this session
+// decline `/all` fan-outs; reported to the daemon at register. Default: accept.
+const acceptsBroadcast = !['0', 'off', 'false', 'no'].includes(
+  (process.env.BELFRY_BROADCAST ?? '').trim().toLowerCase(),
+);
+
 let registered = false;
 let registerInFlight = false;
 let shuttingDown = false;
@@ -64,7 +70,11 @@ function loadToken() {
     return null;
   }
 }
-const authToken = loadToken();
+// `let` (not const) so 401 paths can hot-swap on token rotation. Earlier code
+// exited the process and relied on Claude Code to respawn us — empirically
+// the MCP host does NOT respawn stdio servers on a clean exit (verified
+// 2026-05-10), so we heal in-place instead.
+let authToken = loadToken();
 
 function authHeaders() {
   return authToken ? { authorization: `Bearer ${authToken}` } : {};
@@ -102,7 +112,7 @@ function handleMessage(msg) {
         },
       },
       instructions:
-        'Messages routed via belfry arrive as user input. They originate from Telegram replies the sender quoted to a belfry message. The sender reads Telegram, not this terminal — anything you want them to see must go through the reply tool. Status pings (ready/error) fire automatically via the daemon and do not need a reply call.',
+        'Belfry messages arrive as user input wrapped in a <channel source="belfry" ...> tag; they originate from Telegram replies the sender quoted to a belfry message. Input typed directly into the terminal carries NO such tag. The reply tool sends text to the sender\'s phone over Telegram, and is valid ONLY on a turn whose inbound message was belfry-tagged. When the current turn came from the terminal (no <channel source="belfry"> tag), answer in the terminal and do NOT call reply — pushing terminal-origin answers to Telegram is noise. The terminal is the canonical full transcript: whenever you DO reply to Telegram, also render the full response as normal terminal text, so the terminal never carries less than what went to the phone. If the channel tag carries broadcast="true", this message was fanned out to every session at once (a /all command) — act on it, but keep any reply SHORT: the daemon aggregates all sessions\' replies into one summary, so reply only if you have a specific result worth surfacing and skip routine acknowledgements. Status pings (ready/error) fire automatically via the daemon and do not need a reply call.',
     });
     return;
   }
@@ -117,7 +127,7 @@ function handleMessage(msg) {
         {
           name: 'reply',
           description:
-            'Send a message back to the originating Telegram chat for this session. Use to reply to the human who sent the inbound Telegram message that triggered the current turn. Threads as a quote-reply to that message automatically.',
+            'Send a message back to the originating Telegram chat for this session. Call this ONLY on a turn whose inbound was a belfry <channel source="belfry"> message — for terminal-origin turns (no such tag), answer in the terminal and do not call reply. Always also render the full reply text as terminal output; the terminal must never carry less than what goes to Telegram. Threads as a quote-reply to the originating message automatically.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -170,6 +180,11 @@ async function handleToolCall(msg) {
     respondError(msg.id, -32602, 'reply: text must be a non-empty string');
     return;
   }
+  // No local truncation: the daemon's /send pipeline packs / chunks
+  // oversized text so the full reply makes it through. The user can ask
+  // for the original verbatim via the "full" command. Daemon enforces an
+  // absolute upper bound (lib/registry.js: MAX_SEND_TEXT_LEN); anything
+  // larger surfaces as a 413 here.
   const res = await fetch(`${DAEMON_BASE}/send`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...authHeaders() },
@@ -181,13 +196,17 @@ async function handleToolCall(msg) {
     return;
   }
   const body = await res.json().catch(() => ({}));
+  // Echo what was sent so the model can verify and the terminal has a
+  // verbatim record even when Telegram-side rendering attenuates the
+  // visible body (packed / chunked).
+  const summary = body?.message_id
+    ? `Sent to Telegram (message ${body.message_id}, ${text.length} chars).`
+    : `Sent to Telegram (${text.length} chars).`;
   respond(msg.id, {
     content: [
       {
         type: 'text',
-        text: body?.message_id
-          ? `Sent to Telegram (message ${body.message_id}).`
-          : 'Sent to Telegram.',
+        text: `${summary}\n\nSent text:\n${text}`,
       },
     ],
   });
@@ -200,8 +219,24 @@ async function register() {
     const res = await fetch(`${DAEMON_BASE}/register`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ instance_id: instanceId, slug, cwd, pid: process.pid }),
+      body: JSON.stringify({ instance_id: instanceId, slug, cwd, pid: process.pid, accepts_broadcast: acceptsBroadcast }),
     });
+    if (res.status === 401) {
+      // Common case: the MCP started before the daemon, loadToken() returned
+      // null at module init, and now the daemon is up with auth enabled — our
+      // header-less /register is being refused. Re-read the token file; if it
+      // has appeared (or rotated), hot-swap the cached value and retry.
+      const fresh = loadToken();
+      if (fresh && fresh !== authToken) {
+        authToken = fresh;
+        log('register: token reloaded from disk — retrying');
+        scheduleRetry(register);
+        return;
+      }
+      log('register failed: HTTP 401');
+      scheduleRetry(register);
+      return;
+    }
     if (!res.ok) {
       log(`register failed: HTTP ${res.status}`);
       scheduleRetry(register);
@@ -252,18 +287,16 @@ async function recvLoop() {
       continue;
     }
     if (res.status === 401) {
-      log('daemon rejected auth — token may have rotated; re-reading');
-      // Best-effort: re-read the token file. If different, the daemon
-      // re-keyed; we can't hot-swap our cached header, so exit cleanly so
-      // Claude Code respawns us as a fresh process and we'll read the new
-      // token at startup. If it's the same, the daemon has us blocked for
-      // some other reason (e.g. our register went through but the daemon
-      // restarted) — back off and let the recv loop retry.
+      // Token may have rotated on the daemon side. Re-read the file; if it
+      // differs from our cached value, hot-swap and retry. We can't rely on
+      // a clean process exit triggering a respawn — empirically the MCP host
+      // does not restart stdio servers on exit (verified 2026-05-10).
       const fresh = loadToken();
       if (fresh && fresh !== authToken) {
-        log('token changed on disk — exiting for respawn');
-        await shutdown('token-rotated'); // calls process.exit(0); does not return
-        return;
+        authToken = fresh;
+        log('daemon rejected auth — token reloaded from disk');
+      } else {
+        log('daemon rejected auth — token unchanged, backing off');
       }
       await sleep(RECONNECT_BACKOFF_MS);
       continue;
@@ -290,25 +323,39 @@ async function recvLoop() {
       continue;
     }
     if (typeof body?.text === 'string' && body.text.length > 0) {
-      injectChannelMessage(body.text);
+      injectChannelMessage(body.text, {
+        imagePath: typeof body.image_path === 'string' ? body.image_path : undefined,
+        voicePath: typeof body.voice_path === 'string' ? body.voice_path : undefined,
+        broadcast: body.broadcast === true,
+      });
     }
   }
 }
 
-function injectChannelMessage(text) {
-  // Mirrors the params shape plugin:telegram emits. The `meta` block tells
-  // Claude where this came from so it can mention "via belfry" if asked.
+function injectChannelMessage(text, attachment = {}) {
+  // Channel-notification params. The harness wraps the content in a
+  // <channel ...> tag that gets the meta keys flattened to attributes —
+  // anything in `meta` shows up next to the harness-supplied `source=`,
+  // so don't duplicate `source` here. Slug + ts give the model enough
+  // routing context without bloating the framing.
+  //
+  // image_path / voice_path on params let the receiving harness surface the
+  // attachment to Claude as if the user had attached it at the prompt.
+  // Mirrors the bundled plugin:telegram shape.
+  const params = {
+    content: text,
+    meta: { slug, ts: new Date().toISOString() },
+  };
+  if (attachment.imagePath) params.image_path = attachment.imagePath;
+  if (attachment.voicePath) params.voice_path = attachment.voicePath;
+  // broadcast=true surfaces as a `broadcast="true"` attribute on the <channel>
+  // tag (the harness flattens meta keys to attributes), so the model can tell a
+  // /all fan-out from a directed message and keep its reply succinct.
+  if (attachment.broadcast) params.meta.broadcast = true;
   send({
     jsonrpc: '2.0',
     method: 'notifications/claude/channel',
-    params: {
-      content: text,
-      meta: {
-        source: 'belfry',
-        slug,
-        ts: new Date().toISOString(),
-      },
-    },
+    params,
   });
 }
 

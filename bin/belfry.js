@@ -2,26 +2,42 @@
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 
-import { loadConfig, isSubscribed, isSummarized, isDigested } from '../lib/config.js';
+import { loadConfig, isSubscribed, isSummarized, isDigested, topicFor, topicSlugMap } from '../lib/config.js';
 import { StatusWatcher } from '../lib/watcher.js';
 import { Throttle } from '../lib/throttle.js';
 import { Digest } from '../lib/digest.js';
 import { compose } from '../lib/composer.js';
-import { sendMessage } from '../lib/telegram.js';
+import { sendMessage, setMessageReaction, editMessageText } from '../lib/telegram.js';
 import { ReplyTracker } from '../lib/reply-tracker.js';
 import { Registry } from '../lib/registry.js';
 import { Poller } from '../lib/poller.js';
 import { maybeAutoReply } from '../lib/auto-reply.js';
-import { summarize, summarizeBatch } from '../lib/summarizer.js';
+import { makeBrainSummarizers } from '../lib/brain-summarize.js';
 import { makeStatusHandler } from '../lib/status-handler.js';
 import { makeDigestFlush } from '../lib/digest-flush.js';
 import { NicknameRegistry } from '../lib/nicknames.js';
 import { makeNickHandler } from '../lib/nick-handler.js';
+import { makeHelpHandler } from '../lib/help-handler.js';
 import { RecentMessages } from '../lib/recent-messages.js';
 import { makeAgentHandler } from '../lib/agent-handler.js';
+import { ApprovalTokens } from '../lib/approval-tokens.js';
+import { makeApprovalHandler } from '../lib/approval-handler.js';
+import { approvalKeyboard } from '../lib/telegram.js';
+import { makeResumeHandler } from '../lib/resume-handler.js';
+import { BrainSupervisor } from '../lib/brain.js';
+import { BRAIN_SYSTEM_PROMPT } from '../lib/brain-prompt.js';
+import { makeBrainHandlers } from '../lib/brain-handlers.js';
+import { OversizeCache } from '../lib/oversize-cache.js';
+import { packForTelegram } from '../lib/pack.js';
+import { chunkParagraphAware } from '../lib/chunk.js';
+import { makeVoiceHandler } from '../lib/voice.js';
+import { PingDedup } from '../lib/ping-dedup.js';
+import { resolveReactionConfig } from '../lib/reactions.js';
+import { BroadcastTracker, DEFAULT_BROADCAST_TIMEOUT_MS } from '../lib/broadcast-tracker.js';
+import { buildBroadcastSummary } from '../lib/broadcast-summary.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -57,6 +73,8 @@ async function main() {
   const chatId = (process.env.BELFRY_CHAT_ID ?? '').trim();
   const forumTopicId = (process.env.BELFRY_FORUM_TOPIC_ID ?? '').trim();
   const mcpPort = Number(process.env.BELFRY_MCP_PORT || 49876);
+  const transcribeKey = (process.env.BELFRY_TRANSCRIBE_KEY ?? '').trim();
+  const transcribeProvider = (process.env.BELFRY_TRANSCRIBE_PROVIDER ?? '').trim() || undefined;
   if (!botToken || !chatId) {
     log('missing BELFRY_TOKEN and/or BELFRY_CHAT_ID env vars — relay disabled');
     log('see README.md for setup. Common pattern: a launcher script reads from your secret store and exec-s belfry with the env vars set.');
@@ -64,22 +82,13 @@ async function main() {
   }
   log(`telegram bot configured (chat ${chatId}${forumTopicId ? `, topic ${forumTopicId}` : ''})`);
 
-  // Optional Haiku summarizer. Per-slug opt-in via subscriptions[slug].summarize
-  // in belfry.jsonc. If the env var is unset, summarization is disabled and
-  // the composer falls back to its existing truncate path — no error.
-  const anthropicApiKey = (process.env.ANTHROPIC_API_KEY ?? '').trim();
-  if (anthropicApiKey) {
-    const enabledSlugs = Object.entries(config.subscriptions)
-      .filter(([, s]) => s.summarize)
-      .map(([slug]) => slug);
-    if (enabledSlugs.length > 0) {
-      log(`summarizer enabled for ${enabledSlugs.length} slug(s): ${enabledSlugs.join(', ')}`);
-    }
-  } else {
-    const wantSummarize = Object.values(config.subscriptions).some((s) => s.summarize);
-    if (wantSummarize) {
-      log('ANTHROPIC_API_KEY unset — summarize:true subscriptions will fall back to truncate');
-    }
+  // Per-slug summarizer / digest opt-in via subscriptions[slug].summarize.
+  // Both run via the brain subprocess (subscription auth — see lib/brain.js).
+  const enabledSummarizeSlugs = Object.entries(config.subscriptions)
+    .filter(([, s]) => s.summarize)
+    .map(([slug]) => slug);
+  if (enabledSummarizeSlugs.length > 0) {
+    log(`summarizer enabled for ${enabledSummarizeSlugs.length} slug(s): ${enabledSummarizeSlugs.join(', ')}`);
   }
 
   // Inbound: per-session belfry-mcp plugins register here. The poller routes
@@ -100,6 +109,15 @@ async function main() {
   const tokenPath = join(stateDir, 'registry.token');
   const authToken = ensureAuthToken(tokenPath);
 
+  // Scratch directory for inbound attachments (Telegram photos downloaded
+  // for forwarding to sessions). 0700 dir, 0600 files —
+  // payloads can be sensitive (screenshots of work) so other UIDs on the
+  // host shouldn't read them. GC on startup drops anything older than 24h
+  // since by then the receiving session has either consumed the file or
+  // moved on; the path is opaque to the daemon after delivery.
+  const attachmentDir = join(stateDir, 'attachments');
+  gcOldAttachments(attachmentDir, log);
+
   // In-memory ring of recent outbound messages per slug. Read by the
   // conversational agent's `recent_messages` tool to answer "what's been
   // happening with X?" without going to disk. Non-persistent — a daemon
@@ -107,19 +125,232 @@ async function main() {
   // dashboard JSON is already there.
   const recentMessages = new RecentMessages();
 
+  // Late-bound BrainSupervisor reference. The pack pipeline inside
+  // `sendOutbound` (defined below) needs to consult the brain; brain
+  // construction itself depends on the registry's port + token which
+  // aren't known until later, so we declare the binding here and assign
+  // once the supervisor is built. Closures resolve `brain` at call time,
+  // by which point the assignment has happened.
+  let brain = null;
+
+  // Per-slug dedup for ready pings (content equality + reply-tool echo
+  // suppression). Hoisted above sendOutbound so the reply path can stash
+  // the just-sent text synchronously — see lib/ping-dedup.js.
+  const pingDedup = new PingDedup();
+
+  // Routing-status emoji reactions (#32): 👀 delivered / 🤷 dropped / 🤔
+  // unmatched on the inbound (fired by the poller), and 🫡 replied — swapped
+  // onto the originating message by sendOutbound when the session answers.
+  // Resolved from env (default on); see lib/reactions.js. Hoisted above
+  // sendOutbound so the reply path can read reactEmoji.replied.
+  const reactEmoji = resolveReactionConfig(process.env);
+  if (reactEmoji) {
+    log(`reactions on (delivered=${reactEmoji.delivered ?? '-'} dropped=${reactEmoji.dropped ?? '-'} unmatched=${reactEmoji.unmatched ?? '-'} replied=${reactEmoji.replied ?? '-'})`);
+  }
+
+  // Broadcast completion tracking (#30). When a /all fans out, each reached
+  // session is instructed to answer succinctly; the tracker collects those
+  // replies (tapped in sendOutbound below) and fires `onComplete` once every
+  // session has answered OR a timeout elapses — at which point the daemon
+  // posts an aggregated roll-up threaded under the broadcast.
+  // A non-positive / unparseable override falls back to the default (and an
+  // explicit 0 can't accidentally disable the timeout, which would leak
+  // trackers forever).
+  const broadcastTimeoutOverride = Number(process.env.BELFRY_BROADCAST_TIMEOUT_MS);
+  const BROADCAST_TIMEOUT_MS = broadcastTimeoutOverride > 0 ? broadcastTimeoutOverride : DEFAULT_BROADCAST_TIMEOUT_MS;
+  if (BROADCAST_TIMEOUT_MS !== DEFAULT_BROADCAST_TIMEOUT_MS) {
+    log(`broadcast: completion timeout overridden to ${BROADCAST_TIMEOUT_MS}ms`);
+  }
+  async function sendBroadcastSummary({ messageId, expected, responses, missing, timedOut }) {
+    await sendMessage({
+      botToken, chatId,
+      text: buildBroadcastSummary({ expected, responses, missing, timedOut }),
+      forumTopicId: forumTopicId || null,
+      replyToMessageId: messageId,
+    });
+  }
+  const broadcastTracker = new BroadcastTracker({
+    defaultTimeoutMs: BROADCAST_TIMEOUT_MS,
+    onComplete: (result) => {
+      sendBroadcastSummary(result).catch((err) => log(`broadcast summary failed (msg ${result.messageId}): ${err.message}`));
+    },
+  });
+
+  // Resolve the topic to send a slug's outbound messages into. Per-slug
+  // subscription override → BELFRY_FORUM_TOPIC_ID env fallback → main chat.
+  const topicForSlug = (slug) => topicFor(config, slug) ?? (forumTopicId || null);
+
   // Outbound dispatcher used by both the spoke `reply` tool (via /send) and
   // the auto-reply path below. Records the new message_id in the reply
   // tracker so subsequent quote-replies on this thread route correctly.
+  // Per-slug forum topic override means the right session's topic gets the
+  // reply (when configured); otherwise the daemon-level fallback applies.
+  //
+  // Oversize handling: if the reply doesn't fit one Telegram message we
+  // pack it via the brain (or paragraph-truncate as fallback), stash the
+  // original in `oversizeCache`, and append a "Reply 'full' for the
+  // complete response" footer. The user can later quote-reply with "full"
+  // to retrieve the original chunked across multiple messages.
+  const oversizeCache = new OversizeCache({ max: 50 });
+  // Reserve room for the footer plus a small buffer for the ID-suffix
+  // wording. The pack helper takes `reservedFooterChars` and aims for
+  // (limit - reserved) chars of body.
+  const TELEGRAM_TEXT_CAP = 4096;
+  const FULL_FOOTER = '\n\n↩ Reply "full" to this message for the complete response';
+  // Project-tag prefix for every outbound reply. The user reads Telegram
+  // and needs a one-glance answer to "which session is talking to me right
+  // now?" — slug-tagged for session replies, "daemon:" for daemon-level
+  // sends (brain, /status, command handlers).
+  const replyHeader = (slug) => `${slug || 'daemon'}:\n\n`;
   const sendOutbound = async ({ slug, text, replyToMessageId }) => {
-    const result = await sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId });
-    if (result?.message_id) replyTracker.record(result.message_id, slug);
-    recentMessages.push(slug, { kind: 'outbound', text });
-    log(`sent ${slug}: outbound reply (${text.length} chars, msg ${result?.message_id}${replyToMessageId ? `, in reply to ${replyToMessageId}` : ''})`);
+    // Arm the echo muzzle SYNCHRONOUSLY before any await. The sync prefix
+    // of an async function runs in the calling tick, so a same-tick
+    // `onUpdate` → `shouldSkip` (the auto-reply path) sees the muzzle
+    // before its own check. v0.1.5: drops v0.1.4's text-equality stash
+    // because the reply-tool `text` arg is never byte-identical to the
+    // Stop-hook-derived `last_response` — time proximity is the right
+    // invariant. See lib/ping-dedup.js.
+    pingDedup.muzzleNext(slug);
+    const header = replyHeader(slug);
+    const packTrigger = TELEGRAM_TEXT_CAP - FULL_FOOTER.length - header.length;
+    let toSend = header + text;
+    let stashOriginal = null;
+    let packMode = null;
+    if (text.length > packTrigger) {
+      const packed = await packForTelegram(text, {
+        brain,
+        limit: TELEGRAM_TEXT_CAP,
+        reservedFooterChars: FULL_FOOTER.length + header.length,
+        log,
+      });
+      toSend = header + packed.text + FULL_FOOTER;
+      stashOriginal = text;
+      packMode = packed.mode;
+    }
+    const result = await sendMessage({
+      botToken, chatId, text: toSend, forumTopicId: topicForSlug(slug), replyToMessageId,
+    });
+    if (result?.message_id) {
+      replyTracker.record(result.message_id, slug);
+      if (stashOriginal) oversizeCache.put(result.message_id, slug, stashOriginal);
+    }
+    recentMessages.push(slug, { kind: 'outbound', text: toSend });
+    const packTag = packMode ? `, packed=${packMode} (orig ${text.length}→${toSend.length})` : '';
+    log(`sent ${slug}: outbound reply (${toSend.length} chars, msg ${result?.message_id}${replyToMessageId ? `, in reply to ${replyToMessageId}` : ''}${packTag})`);
+    // Swap the originating inbound's routing-status reaction to the 'replied'
+    // emoji (🫡 by default) now that the session has answered — the 👀 ack
+    // becomes a visible "done" marker. Only when reactions are on, a 'replied'
+    // emoji is configured, and we threaded to an originating message. In the
+    // normal path `replyToMessageId` comes from the registry's owes-reply
+    // marker, which is set only for delivered inbounds that got the 👀, so
+    // 🤷/🤔 messages never get swapped. (A spoke could in theory pass an
+    // explicit reply_to_message_id that bypasses the marker — the current
+    // belfry-mcp never does; if one did, the swap would land on whatever it
+    // named.) Fire-and-forget: a failed swap must never affect the reply that
+    // already went out.
+    if (reactEmoji?.replied && typeof replyToMessageId === 'number' && replyToMessageId > 0) {
+      setMessageReaction({ botToken, chatId, messageId: replyToMessageId, emoji: reactEmoji.replied })
+        .catch((err) => log(`reaction swap failed (msg ${replyToMessageId}): ${err.message}`));
+    }
+    // If this reply answers an in-flight broadcast (its originating message is
+    // the broadcast anchor), record it toward the completion roll-up. The
+    // individual reply still goes out — the summary is additive, not a
+    // replacement. record() is a cheap no-op for non-broadcast replies.
+    if (typeof replyToMessageId === 'number' && replyToMessageId > 0) {
+      broadcastTracker.record(replyToMessageId, slug, text);
+    }
     return { message_id: result?.message_id };
+  };
+
+  // /full expansion. When the user quote-replies "full" on a stashed
+  // oversized message, redeliver the original chunked into Telegram-
+  // sized messages (paragraph-aware splits). First chunk threads as a
+  // reply to the user's "full" message so the conversation stays linked;
+  // subsequent chunks thread under the previously-sent chunk so they
+  // arrive in order without spamming reply-icons.
+  const fullExpandHandler = async ({ targetMessageId, messageId }) => {
+    const entry = oversizeCache.get(targetMessageId);
+    if (!entry) {
+      log(`full-expand: no stash for msg ${targetMessageId} (already expanded or expired)`);
+      return;
+    }
+    const chunks = chunkParagraphAware(entry.text, TELEGRAM_TEXT_CAP);
+    let prevId = messageId;
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      try {
+        const result = await sendMessage({
+          botToken,
+          chatId,
+          text: chunk,
+          forumTopicId: topicForSlug(entry.slug),
+          replyToMessageId: prevId,
+        });
+        if (result?.message_id) {
+          replyTracker.record(result.message_id, entry.slug);
+          prevId = result.message_id;
+        }
+      } catch (err) {
+        log(`full-expand: chunk ${i + 1}/${chunks.length} for msg ${targetMessageId} failed: ${err.message}`);
+        return;
+      }
+    }
+    oversizeCache.delete(targetMessageId);
+    log(`full-expand: sent ${chunks.length} chunk(s) for msg ${targetMessageId} (${entry.text.length} chars total)`);
   };
 
   const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound });
   await registry.start();
+
+  // Broadcast orchestrator (#30). Shared by the Telegram `/all` path (poller)
+  // and the local CLI (`POST /broadcast` → bin/belfry-broadcast.js). Fans the
+  // text out to every registered session, threads each session's reply under a
+  // single anchor message, seeds the completion tracker, and posts a
+  // confirmation. Returns { count, slugs } for the caller.
+  //
+  // The anchor is the user's `/all` message for the Telegram path; CLI
+  // broadcasts have no originating message, so we send a placeholder
+  // confirmation first and use its id as the anchor (edited with the real
+  // count after fan-out). broadcast() + markOwesReply + tracker.start run
+  // synchronously after any anchor-establishing await, so no session reply can
+  // be processed before the threading + tracker are in place.
+  const onBroadcast = async ({ text, targetSlugs = null, excludeSlugs = null, messageId = null, source = 'telegram' }) => {
+    let anchorId = messageId;
+    let cliPlaceholder = false;
+    if (!anchorId) {
+      try {
+        const r = await sendMessage({ botToken, chatId, text: '📡 broadcasting…', forumTopicId: forumTopicId || null });
+        anchorId = r?.message_id ?? null;
+        cliPlaceholder = true;
+      } catch (err) {
+        log(`broadcast: placeholder send failed: ${err.message}`);
+      }
+    }
+    const { count, slugs } = registry.broadcast(text, { targetSlugs, excludeSlugs });
+    if (anchorId && count > 0) {
+      // markOwesReply overwrites any prior pending marker for the slug, so a
+      // session mid-directed-turn that's caught in a broadcast will thread its
+      // next reply under the broadcast anchor (the "fresher inbound supersedes"
+      // contract). Acceptable: the broadcast is the newest inbound.
+      for (const slug of slugs) registry.markOwesReply(slug, anchorId);
+      broadcastTracker.start(anchorId, { expectedSlugs: slugs, timeoutMs: BROADCAST_TIMEOUT_MS });
+    }
+    const confirm = count > 0
+      ? `📡 broadcast to ${count} session(s): ${slugs.join(', ')}`
+      : '📡 broadcast — no sessions registered';
+    try {
+      if (cliPlaceholder && anchorId) {
+        await editMessageText({ botToken, chatId, messageId: anchorId, text: confirm });
+      } else {
+        await sendMessage({ botToken, chatId, text: confirm, forumTopicId: forumTopicId || null, replyToMessageId: anchorId ?? undefined });
+      }
+    } catch (err) {
+      log(`broadcast: confirmation failed: ${err.message}`);
+    }
+    log(`broadcast (${source}) → ${count} session(s): ${slugs.join(', ') || '—'}${anchorId ? `, anchor ${anchorId}` : ''}`);
+    return { count, slugs };
+  };
+  registry.setBroadcastHandler(onBroadcast);
 
   // Watcher is created later (after we know the digest flush + onUpdate
   // callbacks), but the nickname registry and agent handler both need to
@@ -134,32 +365,14 @@ async function main() {
   if (config.nicknames) nicknames.bootstrap(config.nicknames);
   log(`nicknames loaded: ${Object.keys(nicknames.list()).length} entr${Object.keys(nicknames.list()).length === 1 ? 'y' : 'ies'}`);
 
-  // Rate-limited summarizer failure logger. Without this, repeated 401s on
-  // a bad key spam stderr once per ping. We log each category at most once
-  // per minute — enough to tell "key is invalid" from "Anthropic 5xx" from
-  // "network gone" without flooding logs in steady-state failure.
-  const summarizerLogState = new Map();
-  const SUMMARIZER_LOG_WINDOW_MS = 60_000;
-  const logSummarizerFailure = (category, detail) => {
-    const now = Date.now();
-    const last = summarizerLogState.get(category) ?? 0;
-    if (now - last < SUMMARIZER_LOG_WINDOW_MS) return;
-    summarizerLogState.set(category, now);
-    log(`summarizer ${category}${detail ? ` (${detail})` : ''}`);
-  };
-
-  // Two thin wrappers around the summarizer so each callsite (throttle
-  // dispatch, digest flush, /status handler) shares one "is the API key
-  // present? then summarize, else null" path. Both return null when
-  // disabled — callers fall back to the truncate / raw-text path.
-  const maybeSummarize = anthropicApiKey
-    ? (args) => summarize({ ...args, apiKey: anthropicApiKey, logFailure: logSummarizerFailure })
-    : async () => null;
-  const maybeSummarizeBatch = anthropicApiKey
-    ? (args) => summarizeBatch({ ...args, apiKey: anthropicApiKey, logFailure: logSummarizerFailure })
-    : async () => null;
+  // Brain-backed summarizers. Constructed here so statusHandler can reference
+  // them; they close over the `brain` variable (which is constructed below)
+  // and use it lazily — every call resolves brain.isAlive() fresh.
+  const brainSummarizers = { summarize: async () => null, summarizeBatch: async () => null };
+  const maybeSummarize = (args) => brainSummarizers.summarize(args);
+  const maybeSummarizeBatch = (args) => brainSummarizers.summarizeBatch(args);
   const statusHandler = makeStatusHandler({
-    summarizeFn: anthropicApiKey ? maybeSummarize : null,
+    summarizeFn: maybeSummarize,
     send: ({ text, replyToMessageId }) =>
       sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
     // For single-slug /status, record the digest message_id against the
@@ -176,44 +389,191 @@ async function main() {
     log,
   });
 
+  const helpHandler = makeHelpHandler({
+    send: ({ text, replyToMessageId }) =>
+      sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
+    log,
+  });
+
+  // /resume — lists recent sessions per slug; for /resume <slug> <uuid>,
+  // emits a copyable launch command (or executes BELFRY_RESUME_LAUNCHER
+  // if configured — opt-in, lets users wire tmux automation themselves).
+  const resumeHandler = makeResumeHandler({
+    send: ({ text, replyToMessageId }) =>
+      sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
+    resolveNickname: (token) => nicknames.resolve(token),
+    launcherCmd: (process.env.BELFRY_RESUME_LAUNCHER ?? '').trim() || null,
+    log,
+  });
+
+  // Approval tokens for inline-keyboard taps on `waiting` pings (#17).
+  // The throttle dispatch issues a token per waiting message; tap callbacks
+  // resolve back to (slug, messageId) and inject the chosen verb as session
+  // input, then edit the prompt to drop the keyboard + show outcome.
+  const approvalTokens = new ApprovalTokens();
+  const approvalHandler = makeApprovalHandler({
+    botToken,
+    chatId,
+    approvalTokens,
+    registry,
+    log,
+  });
+
   // Conversational agent (#13). Activates only when ANTHROPIC_API_KEY is
   // set; otherwise the handler still runs but classify() returns a decline
   // immediately. getActiveSlugs uses the in-memory cache (no readdir on
   // every Telegram message); the cold-path /nick validation in
   // NicknameRegistry uses the readdir variant directly via watcher.getActiveSlugs.
-  const agentHandler = makeAgentHandler({
-    apiKey: anthropicApiKey,
-    nicknames,
-    recentMessages,
-    getActiveSlugs: () => (watcher ? watcher.getActiveSlugsFromCache() : new Set()),
-    statusDir: undefined, // resolved by readStatus closure below
-    readStatus: (slug, activeSlugSet) => {
-      if (!activeSlugSet.has(slug)) return { error: `no active session named '${slug}'` };
-      try {
-        const file = join(watcher.statusDir, `${slug}.json`);
-        const raw = readFileSync(file, 'utf8');
-        return JSON.parse(raw);
-      } catch (err) {
-        return { error: err.message };
-      }
-    },
-    send: ({ text, replyToMessageId }) =>
-      sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
-    deliver: (slug, text, messageId) => registry.deliver(slug, text, messageId),
-    recordReply: (msgId, slug) => replyTracker.record(msgId, slug),
-    logFailure: logSummarizerFailure, // share the rate-limited bucket
+  //
+  // Brain subprocess: spawned at startup, owns all language work. The
+  // agent handler simply forwards CLASSIFY prompts to the brain and falls
+  // back to "language layer is down" when isAlive() is false. The brain
+  // takes user-visible actions (reply / deliver / decline) via its MCP
+  // tools, dispatching through the daemon's /brain/* endpoints.
+  const brainDir = join(stateDir, 'brain');
+  mkdirSync(brainDir, { recursive: true, mode: 0o700 });
+  const brainMcpConfigPath = join(brainDir, '.mcp.json');
+  writeFileSync(
+    brainMcpConfigPath,
+    JSON.stringify(
+      {
+        mcpServers: {
+          // Server name is flat-alphanumeric ("belfrybrain") so the tool
+          // names register as mcp__belfrybrain__* without claude's
+          // hyphen→underscore transform — keeps the --allowedTools list
+          // in lib/brain.js straightforward to maintain.
+          belfrybrain: {
+            command: 'node',
+            args: [join(dirname(fileURLToPath(import.meta.url)), 'belfry-brain-mcp.js')],
+            env: {
+              BELFRY_MCP_BASE: `http://127.0.0.1:${mcpPort}`,
+              BELFRY_BRAIN_TOKEN_PATH: tokenPath,
+            },
+          },
+        },
+      },
+      null,
+      2,
+    ),
+    { mode: 0o600 },
+  );
+  brain = new BrainSupervisor({
+    workdir: brainDir,
+    mcpConfigPath: brainMcpConfigPath,
+    systemPrompt: BRAIN_SYSTEM_PROMPT,
     log,
   });
+  brain.start();
+  log(`brain: spawned (cwd ${brainDir})`);
+
+  // Bind the brain-backed summarizers now that brain exists. The
+  // closure-captured object reference threaded into statusHandler /
+  // throttle / digestFlush above gets its methods replaced, so callers
+  // see the live functions on first use.
+  const realSummarizers = makeBrainSummarizers({ brain, log });
+  brainSummarizers.summarize = realSummarizers.summarize;
+  brainSummarizers.summarizeBatch = realSummarizers.summarizeBatch;
+
+  // Wire the brain MCP plugin's tool handlers. The watcher is built later
+  // in this main() — handlers receive a getter so they read it fresh each
+  // call. Until the watcher is up, list_sessions / get_session return
+  // empty (the brain handles that gracefully via its `recent_messages`
+  // tool which uses the in-memory ring instead).
+  const brainHandlers = makeBrainHandlers({
+    getWatcher: () => watcher,
+    recentMessages,
+    nicknames,
+    registry,
+    sendTelegram: ({ text, replyToMessageId }) =>
+      sendMessage({
+        botToken,
+        chatId,
+        text: `${replyHeader(null)}${text}`,
+        forumTopicId,
+        replyToMessageId,
+      }),
+    // #34: when the brain routes a message the deterministic router marked 🤔,
+    // upgrade the originating reaction to reflect the real outcome. Mirrors the
+    // poller's reactToRouting — fire-and-forget, no-op when reactions are off.
+    reactRouting: reactEmoji
+      ? (messageId, outcome) => {
+          const emoji = reactEmoji[outcome];
+          if (!emoji || typeof messageId !== 'number' || messageId <= 0) return;
+          setMessageReaction({ botToken, chatId, messageId, emoji })
+            .catch((err) => log(`brain reaction upgrade failed (msg ${messageId}): ${err.message}`));
+        }
+      : null,
+    log,
+  });
+  registry.setBrainHandlers(brainHandlers);
+
+  const agentHandler = makeAgentHandler({
+    brain,
+    brainHandlers,
+    send: ({ text, replyToMessageId }) =>
+      sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId }),
+    log,
+  });
+
+  // Forum-topic routing (#15). Per-slug topic IDs in subscriptions[slug].topic
+  // get inverted at startup so the inbound poller can resolve a Telegram
+  // message_thread_id back to the slug it belongs to in O(1).
+  const topicMap = topicSlugMap(config);
+  if (topicMap.size > 0) {
+    log(`forum topics: ${topicMap.size} slug(s) bound to topic IDs`);
+  }
+
+  // Inbound voice notes (#19): when BELFRY_TRANSCRIBE_KEY is set, hand the
+  // Telegram voice file to a Whisper-compatible provider (Groq by default)
+  // and re-route the transcript as a normal text message. Without a key the
+  // handler still runs — it replies once per voice note to say so, then
+  // drops, so the user knows why nothing happened.
+  const handleVoice = makeVoiceHandler({
+    apiKey: transcribeKey,
+    provider: transcribeProvider,
+    botToken,
+    attachmentDir,
+    log,
+  });
+  const sendVoiceReply = async ({ text, replyToMessageId }) => {
+    try {
+      await sendMessage({
+        botToken,
+        chatId,
+        text,
+        forumTopicId,
+        replyToMessageId,
+      });
+    } catch (err) {
+      log(`voice reply failed: ${err.message}`);
+    }
+  };
+  if (transcribeKey) {
+    log(`voice transcription enabled (provider=${transcribeProvider ?? 'groq'})`);
+  } else {
+    log('voice transcription disabled (BELFRY_TRANSCRIBE_KEY not set) — voice notes will be acknowledged but dropped');
+  }
 
   const poller = new Poller({
     botToken,
     expectedChatId: Number(chatId),
     replyTracker,
     target: registry,
+    reactEmoji,
     onStatusRequest: statusHandler,
     onNickRequest: nickHandler,
+    onHelpRequest: helpHandler,
+    onApproval: approvalHandler,
+    onResumeRequest: resumeHandler,
     onUnmatched: agentHandler,
+    onFullExpand: fullExpandHandler,
+    onBroadcast,
     resolveNickname: (token) => nicknames.resolve(token),
+    resolveTopic: (id) => topicMap.get(id) ?? null,
+    hasFullStash: (msgId) => oversizeCache.has(msgId),
+    attachmentDir,
+    handleVoice,
+    sendVoiceReply,
     log,
   });
   poller.start();
@@ -248,12 +608,30 @@ async function main() {
         responseCap: config.responseCap,
         replyFooter: true,
       });
+      // For `waiting` events (Claude Code blocked on a permission prompt
+      // or notification), include an inline keyboard with Allow/Deny/
+      // Always/Defer. Issue the token now so the keyboard's callback_data
+      // can carry it; patch in the assigned message_id after send returns.
+      // Revoke on send failure to avoid leaking the entry until TTL.
+      let replyMarkup;
+      let tokenForThis = null;
+      if (event.status === 'waiting') {
+        tokenForThis = approvalTokens.issue(slug, null, text);
+        replyMarkup = approvalKeyboard(tokenForThis);
+      }
       try {
-        const result = await sendMessage({ botToken, chatId, text, forumTopicId });
-        if (result?.message_id) replyTracker.record(result.message_id, slug);
+        const result = await sendMessage({
+          botToken, chatId, text, forumTopicId: topicForSlug(slug), replyMarkup,
+          parseMode: 'HTML',
+        });
+        if (result?.message_id) {
+          replyTracker.record(result.message_id, slug);
+          if (tokenForThis) approvalTokens.setMessageId(tokenForThis, result.message_id);
+        }
         recentMessages.push(slug, { kind: 'event', text });
-        log(`sent ${slug}: ${event.status} (${text.length} chars, msg ${result?.message_id})`);
+        log(`sent ${slug}: ${event.status} (${text.length} chars, msg ${result?.message_id}${tokenForThis ? `, +approval-buttons` : ''})`);
       } catch (err) {
+        if (tokenForThis) approvalTokens.revoke(tokenForThis);
         log(`send failed for ${slug}: ${err.message}`);
       }
     },
@@ -266,8 +644,8 @@ async function main() {
   const digestFlush = makeDigestFlush({
     promptCap: config.promptCap,
     responseCap: config.responseCap,
-    summarizeBatchFn: anthropicApiKey ? maybeSummarizeBatch : null,
-    send: ({ text }) => sendMessage({ botToken, chatId, text, forumTopicId }),
+    summarizeBatchFn: maybeSummarizeBatch,
+    send: ({ slug, text }) => sendMessage({ botToken, chatId, text, forumTopicId: topicForSlug(slug), parseMode: 'HTML' }),
     recordReply: (msgId, slug) => replyTracker.record(msgId, slug),
     recordRecent: (slug, entry) => recentMessages.push(slug, entry),
     log,
@@ -300,6 +678,19 @@ async function main() {
       });
 
       if (!shouldFire(config, slug, prevStatus, newStatus)) return;
+
+      // Dedup: skip if this is a ready ping AND either (a) the muzzle is
+      // armed (an outbound send for this slug fired recently — the ping is
+      // the echo of that send), or (b) `last_response` matches the body
+      // of the last ready ping we sent for this slug (/loop watchdog).
+      // Errors and waiting events always fire — they're rare and represent
+      // state the user must see.
+      if (newStatus === 'ready' && pingDedup.shouldSkip(slug, statusFile?.last_response)) {
+        const len = typeof statusFile?.last_response === 'string' ? statusFile.last_response.length : 0;
+        log(`dedup: skipped ${slug} ready ping (${len} chars)`);
+        return;
+      }
+
       const event = { status: newStatus, event: statusFile.event, statusFile };
       if (isDigested(config, slug)) {
         digest.enqueue(slug, event);
@@ -317,6 +708,7 @@ async function main() {
     throttle.clearAll();
     await digest.flushAll();
     await poller.stop();
+    await brain.stop();
     await registry.stop();
     await watcher.stop();
     replyTracker.flush(); // sync flush of any debounced setImmediate save
@@ -324,6 +716,45 @@ async function main() {
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
+  // SIGHUP arrives when the controlling terminal/PTY goes away — a normal
+  // event in a devcontainer where VS Code terminals come and go. Default
+  // node behavior is to terminate, which would crash the daemon every time
+  // the user closes the terminal that started the supervisor. We install a
+  // no-op handler so node keeps running; the supervisor itself also ignores
+  // SIGHUP (see belfry-launch.sh).
+  process.on('SIGHUP', () => log('SIGHUP received — ignoring (daemon stays up)'));
+}
+
+/**
+ * Drop attachment files older than 24h. Best-effort — log on failure
+ * rather than blocking startup. The receiving session has either consumed
+ * the path or moved on by then; we don't track that signal so use a wall
+ * clock cap.
+ */
+function gcOldAttachments(dir, log) {
+  const ATTACHMENT_TTL_MS = 24 * 60 * 60 * 1000;
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return; // dir doesn't exist yet or unreadable; created on first download
+  }
+  const now = Date.now();
+  let dropped = 0;
+  for (const name of names) {
+    const full = join(dir, name);
+    let stat;
+    try { stat = statSync(full); } catch { continue; }
+    if (now - stat.mtimeMs > ATTACHMENT_TTL_MS) {
+      try {
+        unlinkSync(full);
+        dropped++;
+      } catch (err) {
+        log(`gc attachments: failed to unlink ${full}: ${err.message}`);
+      }
+    }
+  }
+  if (dropped > 0) log(`gc attachments: dropped ${dropped} file(s) older than 24h`);
 }
 
 /**
@@ -345,6 +776,21 @@ function ensureAuthToken(tokenPath) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  // Last-ditch crash diagnostics. Without these, an unhandled rejection or
+  // a throw inside a sync HTTP callback terminates the daemon with whatever
+  // stderr write the runtime happens to make — empirically observed to
+  // leave belfry.log truncated mid-line or empty. Log the stack to stderr
+  // (which the launcher pipes to belfry.log) before letting the runtime
+  // terminate normally.
+  process.on('uncaughtException', (err, origin) => {
+    log(`uncaughtException (${origin}): ${err?.stack ?? err}`);
+    process.exit(1);
+  });
+  process.on('unhandledRejection', (reason) => {
+    const stack = reason instanceof Error ? reason.stack : String(reason);
+    log(`unhandledRejection: ${stack}`);
+    process.exit(1);
+  });
   main().catch((err) => {
     log(`fatal: ${err.stack ?? err.message}`);
     process.exit(1);

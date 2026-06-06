@@ -59,6 +59,26 @@ test('deliver returns 0 when no instances are registered for the slug', async ()
   assert.equal(n, 0);
 });
 
+test('deliver passes attachment imagePath through /recv as image_path', async () => {
+  await post('/register', { instance_id: 'imga', slug: 'imgslug', cwd: '/x' });
+  const n = registry.deliver('imgslug', 'screenshot', null, { imagePath: '/tmp/foo.jpg' });
+  assert.equal(n, 1);
+  const r = await fetch(`${baseUrl}/recv?instance_id=imga`);
+  assert.deepEqual(await r.json(), { text: 'screenshot', image_path: '/tmp/foo.jpg' });
+  await post('/unregister', { instance_id: 'imga' });
+});
+
+test('deliver without attachment yields plain { text } recv envelope', async () => {
+  await post('/register', { instance_id: 'pa', slug: 'plainslug', cwd: '/x' });
+  registry.deliver('plainslug', 'just text');
+  const r = await fetch(`${baseUrl}/recv?instance_id=pa`);
+  const body = await r.json();
+  assert.equal(body.text, 'just text');
+  assert.equal(body.image_path, undefined);
+  assert.equal(body.voice_path, undefined);
+  await post('/unregister', { instance_id: 'pa' });
+});
+
 test('recv long-polls and returns text once deliver fires', async () => {
   await post('/register', { instance_id: 'p', slug: 'q', cwd: '/x' });
   const recvP = fetch(`${baseUrl}/recv?instance_id=p`);
@@ -238,11 +258,17 @@ test('/send rejects empty text and oversized text', async () => {
     body: JSON.stringify({ instance_id: 'lim', text: '' }),
   });
   assert.equal(empty.status, 400);
+  // MAX_SEND_TEXT_LEN is now 64 KiB (raised from 4096 once the daemon
+  // started packing oversized replies). The 413 still guards against a
+  // runaway payload — use something well past the new ceiling.
   const big = await fetch(`${url}/send`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ instance_id: 'lim', text: 'x'.repeat(5000) }),
+    body: JSON.stringify({ instance_id: 'lim', text: 'x'.repeat(70 * 1024) }),
   });
+  // The per-request body cap (80 KiB) sits above the text cap, so 70 KiB
+  // of payload makes it through the body read and trips the explicit
+  // length check inside handleSend — 413 either way.
   assert.equal(big.status, 413);
   await reg.stop();
 });
@@ -252,4 +278,158 @@ test('pending reply marker has TTL and is cleared by clearOwesReply', () => {
   assert.equal(registry.getOwesReply('ttl-slug'), 11);
   registry.clearOwesReply('ttl-slug');
   assert.equal(registry.getOwesReply('ttl-slug'), null);
+});
+
+test('brain endpoints dispatch to wired handlers, JSON in/out', async () => {
+  const calls = [];
+  const brainHandlers = {
+    listSessions: () => [{ slug: 'a' }, { slug: 'b' }],
+    getSession: ({ slug }) => { calls.push({ fn: 'getSession', slug }); return { status: 'ready', slug }; },
+    deliver: (args) => { calls.push({ fn: 'deliver', args }); return { fanout: 1 }; },
+  };
+  const reg = new Registry({ port: 0, recvTimeoutMs: 200, brainHandlers });
+  await reg.start();
+  try {
+    const url = `http://127.0.0.1:${reg.port}`;
+    // GET endpoint, no body
+    const r1 = await fetch(`${url}/brain/list-sessions`);
+    assert.equal(r1.status, 200);
+    assert.deepEqual(await r1.json(), [{ slug: 'a' }, { slug: 'b' }]);
+    // POST endpoint with body
+    const r2 = await fetch(`${url}/brain/get-session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ slug: 'belfry' }),
+    });
+    assert.equal(r2.status, 200);
+    assert.deepEqual(await r2.json(), { status: 'ready', slug: 'belfry' });
+    // Action endpoint
+    const r3 = await fetch(`${url}/brain/deliver`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ slug: 'belfry', body: 'hello' }),
+    });
+    assert.equal(r3.status, 200);
+    // Verify dispatch order
+    assert.equal(calls[0].fn, 'getSession');
+    assert.equal(calls[1].fn, 'deliver');
+  } finally {
+    await reg.stop();
+  }
+});
+
+test('brain endpoint with no handlers returns 503', async () => {
+  // Default `registry` fixture has no brainHandlers.
+  const r = await fetch(`${baseUrl}/brain/list-sessions`);
+  assert.equal(r.status, 503);
+});
+
+test('brain endpoint method-mismatch returns 405', async () => {
+  const reg = new Registry({ port: 0, brainHandlers: { listSessions: () => [] } });
+  await reg.start();
+  try {
+    // /brain/list-sessions is GET; POST should 405.
+    const r = await fetch(`http://127.0.0.1:${reg.port}/brain/list-sessions`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    assert.equal(r.status, 405);
+  } finally {
+    await reg.stop();
+  }
+});
+
+test('brain endpoint that throws returns 400 with the error message', async () => {
+  const reg = new Registry({
+    port: 0,
+    brainHandlers: {
+      getSession: () => { throw new Error('slug required'); },
+    },
+  });
+  await reg.start();
+  try {
+    const r = await fetch(`http://127.0.0.1:${reg.port}/brain/get-session`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    assert.equal(r.status, 400);
+    assert.equal(await r.text(), 'slug required');
+  } finally {
+    await reg.stop();
+  }
+});
+
+test('unknown brain endpoint returns 404', async () => {
+  const reg = new Registry({ port: 0, brainHandlers: { listSessions: () => [] } });
+  await reg.start();
+  try {
+    const r = await fetch(`http://127.0.0.1:${reg.port}/brain/mystery`);
+    assert.equal(r.status, 404);
+  } finally {
+    await reg.stop();
+  }
+});
+
+// ── Broadcast (#30) ───────────────────────────────────────────────────────
+
+test('broadcast fans out to every registered instance and reports slugs', async () => {
+  await post('/register', { instance_id: 'b1', slug: 'alpha', cwd: '/a' });
+  await post('/register', { instance_id: 'b2', slug: 'beta', cwd: '/b' });
+  await post('/register', { instance_id: 'b3', slug: 'beta', cwd: '/b' }); // 2nd instance of beta
+  const { count, slugs } = registry.broadcast('fleet message');
+  assert.equal(count, 3, 'all three instances notified');
+  assert.deepEqual(slugs.sort(), ['alpha', 'beta'], 'distinct slugs reached');
+  // The queue item carries broadcast:true so the plugin can flag meta.broadcast.
+  const r = await (await fetch(`${baseUrl}/recv?instance_id=b1`)).json();
+  assert.deepEqual(r, { text: 'fleet message', broadcast: true });
+  for (const id of ['b1', 'b2', 'b3']) await post('/unregister', { instance_id: id });
+});
+
+test('broadcast skips instances that opted out (accepts_broadcast:false)', async () => {
+  await post('/register', { instance_id: 'in', slug: 'yes', cwd: '/y' });
+  await post('/register', { instance_id: 'out', slug: 'no', cwd: '/n', accepts_broadcast: false });
+  const { count, slugs } = registry.broadcast('hi');
+  assert.equal(count, 1);
+  assert.deepEqual(slugs, ['yes']);
+  for (const id of ['in', 'out']) await post('/unregister', { instance_id: id });
+});
+
+test('broadcast honors target_slugs and exclude_slugs filters', async () => {
+  await post('/register', { instance_id: 't1', slug: 'one', cwd: '/1' });
+  await post('/register', { instance_id: 't2', slug: 'two', cwd: '/2' });
+  await post('/register', { instance_id: 't3', slug: 'three', cwd: '/3' });
+  const only = registry.broadcast('x', { targetSlugs: ['one', 'three'] });
+  assert.deepEqual(only.slugs.sort(), ['one', 'three']);
+  const except = registry.broadcast('y', { excludeSlugs: ['two'] });
+  assert.deepEqual(except.slugs.sort(), ['one', 'three']);
+  for (const id of ['t1', 't2', 't3']) await post('/unregister', { instance_id: id });
+});
+
+test('POST /broadcast returns count + slugs (bare fan-out, no onBroadcast wired)', async () => {
+  await post('/register', { instance_id: 'h1', slug: 'p', cwd: '/p' });
+  await post('/register', { instance_id: 'h2', slug: 'q', cwd: '/q' });
+  const res = await post('/broadcast', { text: 'cli broadcast' });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.count, 2);
+  assert.deepEqual(body.slugs.sort(), ['p', 'q']);
+  for (const id of ['h1', 'h2']) await post('/unregister', { instance_id: id });
+});
+
+test('POST /broadcast delegates to onBroadcast when set', async () => {
+  const calls = [];
+  registry.setBroadcastHandler(async (args) => { calls.push(args); return { count: 7, slugs: ['mock'] }; });
+  const res = await post('/broadcast', { text: 'hi', target_slugs: ['a'], exclude_slugs: ['b'] });
+  const body = await res.json();
+  assert.equal(body.count, 7);
+  assert.deepEqual(body.slugs, ['mock']);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].source, 'cli');
+  assert.deepEqual(calls[0].targetSlugs, ['a']);
+  assert.deepEqual(calls[0].excludeSlugs, ['b']);
+  registry.setBroadcastHandler(null);
+});
+
+test('POST /broadcast rejects an empty body', async () => {
+  const res = await post('/broadcast', { text: '' });
+  assert.equal(res.status, 400);
 });

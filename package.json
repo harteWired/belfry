@@ -1,6 +1,6 @@
 {
   "name": "belfry",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "description": "Outbound Telegram relay for Claude Code terminal status — reads claudelike-bar's status JSONs and pings your phone with mobile-friendly per-terminal context.",
   "type": "module",
   "private": true,
@@ -9,7 +9,9 @@
     "belfry": "bin/belfry.js",
     "belfry-mcp": "bin/belfry-mcp.js",
     "belfry-hook": "bin/belfry-hook.js",
-    "belfry-install-hook": "bin/belfry-install-hook.js"
+    "belfry-install-hook": "bin/belfry-install-hook.js",
+    "belfry-doctor": "bin/belfry-doctor.js",
+    "belfry-broadcast": "bin/belfry-broadcast.js"
   },
   "scripts": {
     "start": "node bin/belfry.js",

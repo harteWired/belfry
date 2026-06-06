@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { spawn } from 'node:child_process';
 import { runHook, statusFromEvent, tailTranscript } from '../bin/belfry-hook.js';
 
 function tmpDir(prefix) {
@@ -117,6 +118,135 @@ test('runHook writes the convention JSON atomically', async () => {
   assert.match(written.ts, /^\d{4}-\d{2}-\d{2}T/);
 
   fs.unlinkSync(writtenPath);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('tailTranscript: tool-only turn returns no last_response (does not leak prior turn)', () => {
+  // Repro of the 2026-05-22 "one event behind" bug. Current turn ends with
+  // thinking + tool_use + tool_result entries — no text block. Walking back
+  // past the turn boundary (the user prompt that started this turn) into
+  // the previous turn must NOT surface that turn's text as this turn's
+  // last_response.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'belfry-hook-toolturn-'));
+  const transcriptPath = path.join(dir, 't.jsonl');
+  const lines = [
+    // Previous turn — should never be surfaced as current last_response.
+    JSON.stringify({ message: { role: 'user', content: [{ type: 'text', text: 'older prompt' }] } }),
+    JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'older response' }] } }),
+    // Current turn — tool-only ending.
+    JSON.stringify({ message: { role: 'user', content: [{ type: 'text', text: 'current prompt' }] } }),
+    JSON.stringify({ message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'hmm' }] } }),
+    JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } }),
+    JSON.stringify({ message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: 'out' }] } }),
+  ].join('\n');
+  fs.writeFileSync(transcriptPath, lines);
+  const out = tailTranscript(transcriptPath);
+  assert.equal(out.last_prompt, 'current prompt');
+  assert.equal(out.last_response, undefined, 'must not leak previous turn\'s response into the current turn');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('tailTranscript: tool_result user entries do not count as turn boundary', () => {
+  // Within a single turn, tool_result user entries appear between
+  // assistant tool_use lines. They must be walked past silently — they
+  // belong to the current turn.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'belfry-hook-toolresult-'));
+  const transcriptPath = path.join(dir, 't.jsonl');
+  const lines = [
+    JSON.stringify({ message: { role: 'user', content: [{ type: 'text', text: 'do the work' }] } }),
+    JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash' }] } }),
+    JSON.stringify({ message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'r1' }] } }),
+    JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'done with the work' }] } }),
+    JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash' }] } }),
+    JSON.stringify({ message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'b', content: 'r2' }] } }),
+  ].join('\n');
+  fs.writeFileSync(transcriptPath, lines);
+  const out = tailTranscript(transcriptPath);
+  assert.equal(out.last_prompt, 'do the work');
+  assert.equal(out.last_response, 'done with the work');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('tailTranscript: returns latest text within current turn, not earlier mid-turn text', () => {
+  // Multiple text blocks in current turn. Reverse walk hits the LATEST one
+  // first and returns it — older mid-turn text is ignored.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'belfry-hook-latest-'));
+  const transcriptPath = path.join(dir, 't.jsonl');
+  const lines = [
+    JSON.stringify({ message: { role: 'user', content: [{ type: 'text', text: 'p' }] } }),
+    JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'first thought' }] } }),
+    JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'X' }] } }),
+    JSON.stringify({ message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'i', content: '' }] } }),
+    JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'final answer' }] } }),
+  ].join('\n');
+  fs.writeFileSync(transcriptPath, lines);
+  const out = tailTranscript(transcriptPath);
+  assert.equal(out.last_response, 'final answer');
+  assert.equal(out.last_prompt, 'p');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('tailTranscript: thinking blocks do not count as text', () => {
+  // Thinking content is a separate block type that isn't user-visible.
+  // It must not satisfy the "has text" check on its own.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'belfry-hook-thinking-'));
+  const transcriptPath = path.join(dir, 't.jsonl');
+  const lines = [
+    JSON.stringify({ message: { role: 'user', content: [{ type: 'text', text: 'go' }] } }),
+    JSON.stringify({ message: { role: 'assistant', content: [{ type: 'thinking', thinking: 'reasoning...' }] } }),
+  ].join('\n');
+  fs.writeFileSync(transcriptPath, lines);
+  const out = tailTranscript(transcriptPath);
+  assert.equal(out.last_prompt, 'go');
+  assert.equal(out.last_response, undefined);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('tailTranscript: retries when first scan misses a still-flushing final text block', async () => {
+  // Repro of the v0.1.2-era flush race: Claude Code can fire the Stop
+  // hook before the final assistant text block has been flushed to disk.
+  // First scan returns null; during the retry's syncSleep, a subprocess
+  // appends the missing line; the second scan picks it up.
+  //
+  // Note: syncSleep uses Atomics.wait which blocks the entire Node event
+  // loop including setTimeout. We need a SEPARATE process to do the late
+  // append while the main process is blocked.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'belfry-hook-flush-'));
+  const transcriptPath = path.join(dir, 't.jsonl');
+  fs.writeFileSync(transcriptPath, JSON.stringify({
+    message: { role: 'user', content: [{ type: 'text', text: 'current prompt' }] },
+  }) + '\n');
+  const appender = spawn(process.execPath, ['-e', `
+    const fs = require('node:fs');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+    fs.appendFileSync(${JSON.stringify(transcriptPath)}, ${JSON.stringify(
+      JSON.stringify({ message: { role: 'assistant', content: [{ type: 'text', text: 'final answer flushed late' }] } }) + '\n'
+    )});
+  `], { stdio: 'ignore' });
+  const out = tailTranscript(transcriptPath);
+  await new Promise((res) => appender.once('exit', res));
+  assert.equal(out.last_response, 'final answer flushed late', 'retry must catch the late-flushed text');
+  assert.equal(out.last_prompt, 'current prompt');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('tailTranscript: pure-tool turn still returns no last_response after retry', () => {
+  // Retry should NOT manufacture content — a legitimate pure-tool turn
+  // remains null after the retry runs (just takes ~150ms longer).
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'belfry-hook-puretool-'));
+  const transcriptPath = path.join(dir, 't.jsonl');
+  fs.writeFileSync(transcriptPath, [
+    JSON.stringify({ message: { role: 'user', content: [{ type: 'text', text: 'do it' }] } }),
+    JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash' }] } }),
+    JSON.stringify({ message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'r' }] } }),
+  ].join('\n') + '\n');
+  const t0 = Date.now();
+  const out = tailTranscript(transcriptPath);
+  const elapsed = Date.now() - t0;
+  assert.equal(out.last_response, undefined);
+  assert.equal(out.last_prompt, 'do it');
+  // Sanity: retry path engaged (sleep ran).
+  assert.ok(elapsed >= 140, `expected ~150ms retry delay, got ${elapsed}ms`);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

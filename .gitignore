@@ -5,3 +5,6 @@ node_modules/
 # State + runtime
 state/
 .belfry/
+.claude/
+nohup.out
+docs/sessions/.resume-log

@@ -112,6 +112,40 @@ test('deliver: throws when slug or body missing', () => {
   assert.throws(() => h.deliver({ slug: 'belfry' }), /body required/);
 });
 
+test('deliver: upgrades 🤔→delivered reaction when a live session got it (#34)', () => {
+  const reactions = [];
+  const h = makeBrainHandlers(
+    baseDeps({ reactRouting: (messageId, outcome) => reactions.push({ messageId, outcome }) }),
+  );
+  h.deliver({ slug: 'belfry', body: 'track the printer', reply_to_message_id: 42 });
+  assert.deepEqual(reactions, [{ messageId: 42, outcome: 'delivered' }]);
+});
+
+test('deliver: upgrades 🤔→dropped reaction when slug resolved but no session registered (#34)', () => {
+  const reactions = [];
+  // Registry whose deliver fans out to zero instances (slug known, none live).
+  const reg = { deliver: () => 0 };
+  const h = makeBrainHandlers(
+    baseDeps({ registry: reg, reactRouting: (messageId, outcome) => reactions.push({ messageId, outcome }) }),
+  );
+  h.deliver({ slug: 'belfry', body: 'track the printer', reply_to_message_id: 42 });
+  assert.deepEqual(reactions, [{ messageId: 42, outcome: 'dropped' }]);
+});
+
+test('deliver: does not react when no originating message_id (#34)', () => {
+  const reactions = [];
+  const h = makeBrainHandlers(
+    baseDeps({ reactRouting: (messageId, outcome) => reactions.push({ messageId, outcome }) }),
+  );
+  h.deliver({ slug: 'belfry', body: 'cold deliver, no quote' });
+  assert.equal(reactions.length, 0);
+});
+
+test('deliver: tolerates a null reactRouting (reactions off) (#34)', () => {
+  const h = makeBrainHandlers(baseDeps({ reactRouting: null }));
+  assert.doesNotThrow(() => h.deliver({ slug: 'belfry', body: 'x', reply_to_message_id: 42 }));
+});
+
 test('reply: sends to telegram, returns message_id', async () => {
   const send = fakeSender();
   const h = makeBrainHandlers(baseDeps({ sendTelegram: send }));

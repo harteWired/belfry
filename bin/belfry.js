@@ -492,6 +492,17 @@ async function main() {
         forumTopicId,
         replyToMessageId,
       }),
+    // #34: when the brain routes a message the deterministic router marked 🤔,
+    // upgrade the originating reaction to reflect the real outcome. Mirrors the
+    // poller's reactToRouting — fire-and-forget, no-op when reactions are off.
+    reactRouting: reactEmoji
+      ? (messageId, outcome) => {
+          const emoji = reactEmoji[outcome];
+          if (!emoji || typeof messageId !== 'number' || messageId <= 0) return;
+          setMessageReaction({ botToken, chatId, messageId, emoji })
+            .catch((err) => log(`brain reaction upgrade failed (msg ${messageId}): ${err.message}`));
+        }
+      : null,
     log,
   });
   registry.setBrainHandlers(brainHandlers);

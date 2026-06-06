@@ -6,3 +6,5 @@ node_modules/
 state/
 .belfry/
 .claude/
+nohup.out
+docs/sessions/.resume-log

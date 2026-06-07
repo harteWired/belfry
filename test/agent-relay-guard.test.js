@@ -53,6 +53,16 @@ test('the same text to a DIFFERENT target is not a duplicate', () => {
   assert.equal(g.check('a', 'c', 'hi').ok, true);
 });
 
+test('distinct messages sharing a long prefix are NOT falsely deduped (#36 review)', () => {
+  const clk = fakeClock();
+  const g = new AgentRelayGuard({ capacity: 10, refillPerSec: 0, now: clk.now });
+  const prefix = 'Task complete: step '.padEnd(70, 'x'); // > 64 chars, shared
+  assert.equal(g.check('a', 'b', prefix + ' 1 of 9').ok, true);
+  // Same length-ish, identical first 64 bytes, but genuinely different content.
+  const other = prefix + ' 7 of 9';
+  assert.equal(g.check('a', 'b', other).ok, true, 'must not collide on prefix');
+});
+
 test('a duplicate is allowed again once the TTL lapses', () => {
   const clk = fakeClock();
   const g = new AgentRelayGuard({ capacity: 10, refillPerSec: 0, dupTtlMs: 5000, now: clk.now });

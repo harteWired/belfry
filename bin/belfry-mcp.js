@@ -204,6 +204,13 @@ async function handleToolCall(msg) {
     respondError(msg.id, -32602, 'reply: text must be a non-empty string');
     return;
   }
+  // Provenance (#33/#36) is enforced behaviourally, not structurally: the MCP
+  // instructions + tool descriptions tell the model not to call `reply` on a
+  // terminal-origin or agent-origin (origin="agent") turn. There is no
+  // server-side gate here because the tool handler is stateless (it doesn't
+  // know the current turn's inbound origin) — deliberate, matching #33's
+  // posture and the single-user/trusted-local-model charter. Structural
+  // enforcement would require per-session last-origin tracking.
   // No local truncation: the daemon's /send pipeline packs / chunks
   // oversized text so the full reply makes it through. The user can ask
   // for the original verbatim via the "full" command. Daemon enforces an

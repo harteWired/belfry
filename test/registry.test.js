@@ -433,3 +433,65 @@ test('POST /broadcast rejects an empty body', async () => {
   const res = await post('/broadcast', { text: '' });
   assert.equal(res.status, 400);
 });
+
+// --- agent-to-agent relay: POST /send-to (#36) ---
+
+test('POST /send-to relays from sender slug to target with provenance', async () => {
+  await post('/register', { instance_id: 'src', slug: 'alpha', cwd: '/x' });
+  await post('/register', { instance_id: 'dst', slug: 'beta', cwd: '/x' });
+  const res = await post('/send-to', { instance_id: 'src', to_slug: 'beta', text: 'ping' });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.delivered, 1);
+  // The destination receives it tagged origin=agent, from=<sender slug>.
+  const r = await fetch(`${baseUrl}/recv?instance_id=dst`);
+  assert.deepEqual(await r.json(), { text: 'ping', origin: 'agent', from: 'alpha' });
+  await post('/unregister', { instance_id: 'src' });
+  await post('/unregister', { instance_id: 'dst' });
+});
+
+test('POST /send-to to an offline slug is ok with delivered:0, not an error', async () => {
+  await post('/register', { instance_id: 'src2', slug: 'alpha2', cwd: '/x' });
+  const res = await post('/send-to', { instance_id: 'src2', to_slug: 'nobody', text: 'hi' });
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.delivered, 0);
+  await post('/unregister', { instance_id: 'src2' });
+});
+
+test('POST /send-to does NOT set an owes-reply marker on the target', async () => {
+  await post('/register', { instance_id: 'src3', slug: 'alpha3', cwd: '/x' });
+  await post('/register', { instance_id: 'dst3', slug: 'beta3', cwd: '/x' });
+  await post('/send-to', { instance_id: 'src3', to_slug: 'beta3', text: 'peer' });
+  assert.equal(registry.getOwesReply('beta3'), null);
+  await post('/unregister', { instance_id: 'src3' });
+  await post('/unregister', { instance_id: 'dst3' });
+});
+
+test('POST /send-to rejects an unknown sender instance with 404', async () => {
+  const res = await post('/send-to', { instance_id: 'ghost', to_slug: 'beta', text: 'x' });
+  assert.equal(res.status, 404);
+});
+
+test('POST /send-to rejects a bad to_slug / empty text with 400', async () => {
+  await post('/register', { instance_id: 'src4', slug: 'alpha4', cwd: '/x' });
+  assert.equal((await post('/send-to', { instance_id: 'src4', to_slug: 'bad slug!', text: 'x' })).status, 400);
+  assert.equal((await post('/send-to', { instance_id: 'src4', to_slug: 'beta', text: '' })).status, 400);
+  await post('/unregister', { instance_id: 'src4' });
+});
+
+test('POST /send-to returns 429 when the relay guard blocks', async () => {
+  const blockingGuard = { check: () => ({ ok: false, reason: 'rate' }) };
+  const guarded = new Registry({ port: 0, recvTimeoutMs: 200, relayGuard: blockingGuard });
+  await guarded.start();
+  const gurl = `http://127.0.0.1:${guarded.port}`;
+  const reg = (b) => fetch(`${gurl}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(b) });
+  await reg({ instance_id: 's', slug: 'alpha', cwd: '/x' });
+  await reg({ instance_id: 'd', slug: 'beta', cwd: '/x' });
+  const res = await fetch(`${gurl}/send-to`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ instance_id: 's', to_slug: 'beta', text: 'loop' }) });
+  assert.equal(res.status, 429);
+  assert.equal((await res.json()).reason, 'rate');
+  await guarded.stop();
+});

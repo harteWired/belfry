@@ -43,6 +43,7 @@ import { PingDedup } from '../lib/ping-dedup.js';
 import { resolveReactionConfig } from '../lib/reactions.js';
 import { BroadcastTracker, DEFAULT_BROADCAST_TIMEOUT_MS } from '../lib/broadcast-tracker.js';
 import { buildBroadcastSummary } from '../lib/broadcast-summary.js';
+import { AgentRelayGuard } from '../lib/agent-relay-guard.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -323,7 +324,10 @@ async function main() {
     log(`full-expand: sent ${chunks.length} chunk(s) for msg ${targetMessageId} (${entry.text.length} chars total)`);
   };
 
-  const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound });
+  // Agent-to-agent relay flood/loop guard (#36): bounds runaway session↔session
+  // ping-pong from the daemon side, independent of the models.
+  const relayGuard = new AgentRelayGuard();
+  const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound, relayGuard });
   await registry.start();
 
   // Broadcast orchestrator (#30). Shared by the Telegram `/all` path (poller)

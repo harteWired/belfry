@@ -112,7 +112,7 @@ function handleMessage(msg) {
         },
       },
       instructions:
-        'Belfry messages arrive as user input wrapped in a <channel source="belfry" ...> tag; they originate from Telegram replies the sender quoted to a belfry message. Input typed directly into the terminal carries NO such tag. The reply tool sends text to the sender\'s phone over Telegram, and is valid ONLY on a turn whose inbound message was belfry-tagged. When the current turn came from the terminal (no <channel source="belfry"> tag), answer in the terminal and do NOT call reply — pushing terminal-origin answers to Telegram is noise. The terminal is the canonical full transcript: whenever you DO reply to Telegram, also render the full response as normal terminal text, so the terminal never carries less than what went to the phone. If the channel tag carries broadcast="true", this message was fanned out to every session at once (a /all command) — act on it, but keep any reply SHORT: the daemon aggregates all sessions\' replies into one summary, so reply only if you have a specific result worth surfacing and skip routine acknowledgements. Status pings (ready/error) fire automatically via the daemon and do not need a reply call.',
+        'Belfry messages arrive as user input wrapped in a <channel source="belfry" ...> tag; they originate from Telegram replies the sender quoted to a belfry message. Input typed directly into the terminal carries NO such tag. The reply tool sends text to the sender\'s phone over Telegram, and is valid ONLY on a turn whose inbound message was belfry-tagged. When the current turn came from the terminal (no <channel source="belfry"> tag), answer in the terminal and do NOT call reply — pushing terminal-origin answers to Telegram is noise. The terminal is the canonical full transcript: whenever you DO reply to Telegram, also render the full response as normal terminal text, so the terminal never carries less than what went to the phone. If the channel tag carries broadcast="true", this message was fanned out to every session at once (a /all command) — act on it, but keep any reply SHORT: the daemon aggregates all sessions\' replies into one summary, so reply only if you have a specific result worth surfacing and skip routine acknowledgements. If the channel tag carries origin="agent" from="<slug>", this message came from ANOTHER local Claude Code session, not from the human — answer it (if at all) with the send_to tool addressed to that slug, and do NOT use the reply tool (reply pushes to the human\'s phone, which a peer message must not do). Status pings (ready/error) fire automatically via the daemon and do not need a reply call.',
     });
     return;
   }
@@ -127,7 +127,7 @@ function handleMessage(msg) {
         {
           name: 'reply',
           description:
-            'Send a message back to the originating Telegram chat for this session. Call this ONLY on a turn whose inbound was a belfry <channel source="belfry"> message — for terminal-origin turns (no such tag), answer in the terminal and do not call reply. Always also render the full reply text as terminal output; the terminal must never carry less than what goes to Telegram. Threads as a quote-reply to the originating message automatically.',
+            'Send a message back to the originating Telegram chat (the human) for this session. Call this ONLY on a turn whose inbound was a belfry <channel source="belfry"> message AND was NOT tagged origin="agent" — for terminal-origin turns (no tag) answer in the terminal, and for peer-agent messages (origin="agent") answer with send_to, never reply. Always also render the full reply text as terminal output; the terminal must never carry less than what goes to Telegram. Threads as a quote-reply to the originating message automatically.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -137,6 +137,26 @@ function handleMessage(msg) {
               },
             },
             required: ['text'],
+            additionalProperties: false,
+          },
+        },
+        {
+          name: 'send_to',
+          description:
+            'Send a message to ANOTHER local Claude Code session by its slug (agent-to-agent, #36). Use this to coordinate with a peer session — NOT to answer the human. When a channel message arrives tagged origin="agent" from="<slug>", it came from a peer session; reply to it with send_to(slug="<slug>", …), never with the `reply` tool (reply pushes to the human\'s phone). The peer receives your text as an origin="agent" channel message. The daemon rate-limits relays to prevent loops; a 429 means you are sending too fast.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              slug: {
+                type: 'string',
+                description: 'Slug of the destination session (e.g. "api", "travel-planner").',
+              },
+              text: {
+                type: 'string',
+                description: 'Message text to deliver to that session.',
+              },
+            },
+            required: ['slug', 'text'],
             additionalProperties: false,
           },
         },
@@ -171,6 +191,10 @@ function handleMessage(msg) {
 async function handleToolCall(msg) {
   const name = msg.params?.name;
   const args = msg.params?.arguments ?? {};
+  if (name === 'send_to') {
+    await handleSendToTool(msg, args);
+    return;
+  }
   if (name !== 'reply') {
     respondError(msg.id, -32602, `unknown tool: ${name}`);
     return;
@@ -209,6 +233,46 @@ async function handleToolCall(msg) {
         text: `${summary}\n\nSent text:\n${text}`,
       },
     ],
+  });
+}
+
+// send_to (#36): relay a message to another local session by slug via the
+// daemon's /send-to route. The daemon resolves OUR slug from instance_id (so we
+// can't spoof a sender), applies the flood/loop guard, and injects the text into
+// the destination session as an origin="agent" channel message.
+async function handleSendToTool(msg, args) {
+  const toSlug = typeof args.slug === 'string' ? args.slug.trim() : '';
+  const text = typeof args.text === 'string' ? args.text : '';
+  if (toSlug.length === 0) {
+    respondError(msg.id, -32602, 'send_to: slug must be a non-empty string');
+    return;
+  }
+  if (text.length === 0) {
+    respondError(msg.id, -32602, 'send_to: text must be a non-empty string');
+    return;
+  }
+  const res = await fetch(`${DAEMON_BASE}/send-to`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ instance_id: instanceId, to_slug: toSlug, text }),
+  });
+  if (res.status === 429) {
+    const body = await res.json().catch(() => ({}));
+    respondError(msg.id, -32603, `send_to rate-limited (${body?.reason ?? 'rate'}) — slow down peer messaging to "${toSlug}"`);
+    return;
+  }
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => '');
+    respondError(msg.id, -32603, `daemon /send-to ${res.status}: ${errBody.slice(0, 200)}`);
+    return;
+  }
+  const body = await res.json().catch(() => ({}));
+  const delivered = body?.delivered ?? 0;
+  const summary = delivered > 0
+    ? `Relayed to "${toSlug}" (${delivered} live session(s)).`
+    : `"${toSlug}" has no live session right now — nothing delivered.`;
+  respond(msg.id, {
+    content: [{ type: 'text', text: `${summary}\n\nSent text:\n${text}` }],
   });
 }
 
@@ -327,6 +391,8 @@ async function recvLoop() {
         imagePath: typeof body.image_path === 'string' ? body.image_path : undefined,
         voicePath: typeof body.voice_path === 'string' ? body.voice_path : undefined,
         broadcast: body.broadcast === true,
+        origin: typeof body.origin === 'string' ? body.origin : undefined,
+        from: typeof body.from === 'string' ? body.from : undefined,
       });
     }
   }
@@ -352,6 +418,10 @@ function injectChannelMessage(text, attachment = {}) {
   // tag (the harness flattens meta keys to attributes), so the model can tell a
   // /all fan-out from a directed message and keep its reply succinct.
   if (attachment.broadcast) params.meta.broadcast = true;
+  // Agent-to-agent provenance (#36): surfaces as origin="agent" from="<slug>" on
+  // the channel tag so the model answers a peer via send_to(from), not `reply`.
+  if (attachment.origin) params.meta.origin = attachment.origin;
+  if (attachment.from) params.meta.from = attachment.from;
   send({
     jsonrpc: '2.0',
     method: 'notifications/claude/channel',

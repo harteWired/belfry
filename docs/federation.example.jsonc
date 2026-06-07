@@ -1,0 +1,32 @@
+// belfry federation config — EXAMPLE / placeholders only (#29).
+//
+// Federation lets agent-to-agent `send_to` cross machines over a decentralized,
+// hub-free mesh (Tailscale transport). NOTHING host-specific is committed to the
+// repo: copy the shape below into the `federation` block of your own
+// ~/.claude/belfry.jsonc, or supply it via env. Each daemon gets its OWN values.
+//
+// Identity + secrets are best supplied via env (override the file per field):
+//   BELFRY_HOST_LETTER   single [a-z0-9] — this host's address prefix (required to enable)
+//   BELFRY_HOST_NAME     display name (defaults to the letter)
+//   BELFRY_FED_TOKEN     per-daemon bearer for inter-daemon auth (secret → env only)
+//   BELFRY_FED_PEERS     compact peer list overriding `peers` below, e.g.
+//                        "p,PeerName,http://peer-a.tailnet:49876;q,http://peer-b.tailnet:49876"
+//
+// Addressing: a session is reached by its bare slug when that slug is globally
+// unique across the mesh; when two hosts share a slug, disambiguate with the
+// one-letter host prefix, e.g. `p/build`.
+{
+  "federation": {
+    // This host's identity. Pick a unique single-char letter per machine.
+    "hostLetter": "a",
+    "hostName": "host-a",
+
+    // The other daemons in your mesh. `addr` is each peer's loopback-registry
+    // URL reached over your private network (e.g. a Tailscale MagicDNS name or
+    // 100.x address). Letters must be unique and differ from this host's.
+    "peers": [
+      { "letter": "b", "name": "host-b", "addr": "http://host-b.your-tailnet.ts.net:49876" },
+      { "letter": "c", "name": "host-c", "addr": "http://host-c.your-tailnet.ts.net:49876" }
+    ]
+  }
+}

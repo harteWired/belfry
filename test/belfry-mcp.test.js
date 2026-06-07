@@ -127,6 +127,33 @@ test('plugin emits notifications/claude/channel when daemon delivers', async () 
   await p.stop();
 });
 
+test('broadcast injection emits meta.broadcast as the STRING "true", and all meta values are strings', async () => {
+  // Regression for the long-standing "/all never reached sessions" bug: the
+  // channel notification meta is typed Record<string,string>, so a boolean
+  // meta value fails the MCP params schema and the whole notification is
+  // dropped. Every meta value MUST be a string.
+  const p = startPlugin({ env: { CLAUDELIKE_BAR_NAME: 'r-bc' } });
+  p.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } });
+  await p.waitFor((m) => m.id === 1);
+  p.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  const start = Date.now();
+  while (Date.now() - start < 2000) {
+    if (registry.bySlug.has('r-bc')) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.ok(registry.bySlug.has('r-bc'));
+
+  registry.broadcast('all hands', { targetSlugs: ['r-bc'] });
+
+  const notif = await p.waitFor((m) => m.method === 'notifications/claude/channel', 3000);
+  assert.equal(notif.params.content, 'all hands');
+  assert.strictEqual(notif.params.meta.broadcast, 'true', 'must be string "true", not boolean');
+  for (const [k, v] of Object.entries(notif.params.meta)) {
+    assert.equal(typeof v, 'string', `meta.${k} must be a string (got ${typeof v})`);
+  }
+  await p.stop();
+});
+
 test('plugin tools/list advertises the reply tool', async () => {
   const p = startPlugin();
   p.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } });

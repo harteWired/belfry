@@ -351,7 +351,13 @@ function injectChannelMessage(text, attachment = {}) {
   // broadcast=true surfaces as a `broadcast="true"` attribute on the <channel>
   // tag (the harness flattens meta keys to attributes), so the model can tell a
   // /all fan-out from a directed message and keep its reply succinct.
-  if (attachment.broadcast) params.meta.broadcast = true;
+  // MUST be the STRING 'true', not a boolean: the channel notification's `meta`
+  // is typed `Record<string, string>`, and a non-string value fails the MCP
+  // params schema, which drops the ENTIRE notification silently — so a broadcast
+  // never reached the model. This was the long-standing "/all doesn't work" bug
+  // (broken since #30); directed messages worked because their meta (slug, ts)
+  // is all strings.
+  if (attachment.broadcast) params.meta.broadcast = 'true';
   send({
     jsonrpc: '2.0',
     method: 'notifications/claude/channel',

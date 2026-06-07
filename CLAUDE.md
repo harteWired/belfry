@@ -64,6 +64,7 @@ lib/router.js              — incoming Telegram update → (slug, text, message
 lib/poller.js              — Telegram getUpdates long-poll loop
 lib/registry.js            — HTTP register/unregister/recv/send/broadcast + pending-reply tracking
 lib/broadcast-tracker.js   — in-flight /all completion tracking (all-replied or timeout → summary)
+lib/send-queue.js          — serial outbound pacer: rate-limits every Telegram write, honours 429 retry_after
 lib/slug.js                — slug derivation per docs/CONVENTION.md
 lib/voice.js               — inbound Telegram voice-note transcription (Whisper via Groq/OpenAI)
 docs/CONVENTION.md         — shared local-machine convention spec
@@ -132,6 +133,7 @@ Slug derivation order (see `lib/slug.js` and `docs/CONVENTION.md`): `CLAUDE_SESS
 | `BELFRY_REACT_DELIVERED` / `BELFRY_REACT_DROPPED` / `BELFRY_REACT_UNMATCHED` / `BELFRY_REACT_REPLIED` | no | Override the per-outcome emoji (defaults 👀 / 🤷 / 🤔 / 🫡). Set one to an empty string to disable just that outcome. `REPLIED` is the 🫡 that the inbound's 👀 swaps to once the session answers. Must be from Telegram's free reaction set (~70 emoji) — note that set has **no green check** (✅/✔️ both 400 with REACTION_INVALID), which is why the replied default is a salute, not a checkmark. |
 | `BELFRY_BROADCAST` | no | Per-session broadcast opt-out (#30), read by `belfry-mcp`. Set to a falsy value (`0`/`off`/`false`/`no`) to make this session decline `/all` fan-outs (reported as `accepts_broadcast:false` at register). Default: accept. |
 | `BELFRY_BROADCAST_TIMEOUT_MS` | no | How long the daemon waits for all sessions to reply to a `/all` before posting the roll-up with the non-responders listed. Default `120000` (2 min). |
+| `BELFRY_SEND_INTERVAL_MS` | no | Base minimum gap between outbound Telegram writes, enforced by `lib/send-queue.js` (#35). Default `1100` (safe for Telegram's ~1 msg/s per-chat limit). All sends — replies, pings, reactions, broadcast confirmations/roll-ups — funnel through one serial queue, so a `/all` fan-out no longer floods the chat into a 429. On a 429 the queue waits the server's `retry_after` and retries the same message (nothing dropped), and raises an adaptive floor to that interval (≈3s for groups/supergroups) for a cooldown window before relaxing back to the base. Raise this if you still see 429s; the queue auto-tunes regardless. |
 
 The conversational agent + summarizer run inside a long-running `claude --print --input-format=stream-json` subprocess (the "brain"; see `lib/brain.js`) that uses the user's Claude.ai subscription via OAuth — no `ANTHROPIC_API_KEY` needed. Without claude on PATH or without subscription credentials, the brain simply doesn't start; deterministic routes still work and language-layer routes return "language layer is down".
 

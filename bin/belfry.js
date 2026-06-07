@@ -10,7 +10,12 @@ import { StatusWatcher } from '../lib/watcher.js';
 import { Throttle } from '../lib/throttle.js';
 import { Digest } from '../lib/digest.js';
 import { compose } from '../lib/composer.js';
-import { sendMessage, setMessageReaction, editMessageText } from '../lib/telegram.js';
+import {
+  sendMessage as rawSendMessage,
+  setMessageReaction as rawSetMessageReaction,
+  editMessageText as rawEditMessageText,
+} from '../lib/telegram.js';
+import { SendQueue, DEFAULT_SEND_INTERVAL_MS } from '../lib/send-queue.js';
 import { ReplyTracker } from '../lib/reply-tracker.js';
 import { Registry } from '../lib/registry.js';
 import { Poller } from '../lib/poller.js';
@@ -81,6 +86,25 @@ async function main() {
     process.exit(1);
   }
   log(`telegram bot configured (chat ${chatId}${forumTopicId ? `, topic ${forumTopicId}` : ''})`);
+
+  // Single serial pacer for every outbound Telegram write (#35). belfry sends
+  // to one chat, whose per-chat rate limit a `/all` fan-out (N replies + N
+  // reaction swaps + pings, all near-simultaneous) blows straight past → 429.
+  // Funnelling sendMessage/editMessageText/setMessageReaction through one queue
+  // turns the burst into a paced stream and honours the 429 retry_after instead
+  // of dropping the message. The wrappers shadow the imported names, so every
+  // existing call site downstream is paced with no further changes. Base
+  // interval is BELFRY_SEND_INTERVAL_MS (default 1.1s, safe for ~1 msg/s); on a
+  // 429 the queue self-tunes up to the server's retry_after (≈3s for groups).
+  const sendIntervalOverride = Number(process.env.BELFRY_SEND_INTERVAL_MS);
+  const sendQueue = new SendQueue({
+    minIntervalMs: sendIntervalOverride > 0 ? sendIntervalOverride : DEFAULT_SEND_INTERVAL_MS,
+    log,
+  });
+  log(`send pacing: ${sendQueue.minIntervalMs}ms base interval, 429 retry_after honoured`);
+  const sendMessage = (args) => sendQueue.enqueue(() => rawSendMessage(args), { label: 'sendMessage' });
+  const setMessageReaction = (args) => sendQueue.enqueue(() => rawSetMessageReaction(args), { label: 'setMessageReaction' });
+  const editMessageText = (args) => sendQueue.enqueue(() => rawEditMessageText(args), { label: 'editMessageText' });
 
   // Per-slug summarizer / digest opt-in via subscriptions[slug].summarize.
   // Both run via the brain subprocess (subscription auth — see lib/brain.js).
@@ -560,6 +584,7 @@ async function main() {
     replyTracker,
     target: registry,
     reactEmoji,
+    react: setMessageReaction, // paced wrapper (#35) — inbound ack shares the send queue
     onStatusRequest: statusHandler,
     onNickRequest: nickHandler,
     onHelpRequest: helpHandler,

@@ -44,6 +44,9 @@ import { resolveReactionConfig } from '../lib/reactions.js';
 import { BroadcastTracker, DEFAULT_BROADCAST_TIMEOUT_MS } from '../lib/broadcast-tracker.js';
 import { buildBroadcastSummary } from '../lib/broadcast-summary.js';
 import { AgentRelayGuard } from '../lib/agent-relay-guard.js';
+import { parseFederationConfig } from '../lib/federation-config.js';
+import { wireFederation, DEFAULT_FED_PORT } from '../lib/federation-daemon.js';
+import { TelegramOwner } from '../lib/federation-owner.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -380,6 +383,47 @@ async function main() {
   };
   registry.setBroadcastHandler(onBroadcast);
 
+  // Federation (#29): the cross-machine agent mesh. OFF unless a host letter is
+  // configured (env BELFRY_HOST_LETTER or the belfry.jsonc `federation` block),
+  // so every single-host deployment is byte-for-byte unchanged. When on, we
+  // start a fail-closed /fed/* listener on the tailnet interface, attach the
+  // remote-`send_to` router to the registry, gossip our local slug set to peers,
+  // and run the floating Telegram-owner election in the poller (a 409 standby
+  // instead of one daemon hogging the bot). A bad config or a failed listener
+  // start is logged and swallowed — the daemon keeps serving locally.
+  let federation = null;
+  let telegramOwner = null;
+  let fedConfig = { enabled: false };
+  try {
+    fedConfig = parseFederationConfig({ env: process.env, file: config.federation });
+  } catch (err) {
+    log(`federation: invalid config (${err.message}) — federation disabled`);
+  }
+  if (fedConfig.enabled && !fedConfig.token) {
+    log('federation: host letter set but BELFRY_FED_TOKEN missing — refusing an unauthenticated mesh listener; federation disabled');
+  } else if (fedConfig.enabled) {
+    const fedBind = (process.env.BELFRY_FED_BIND ?? '').trim() || '127.0.0.1';
+    const fedPortEnv = Number(process.env.BELFRY_FED_PORT);
+    const fedPort = fedPortEnv > 0 ? fedPortEnv : DEFAULT_FED_PORT;
+    try {
+      federation = await wireFederation({
+        registry,
+        fedConfig,
+        relayGuard,
+        bind: fedBind,
+        port: fedPort,
+        log,
+      });
+      federation.startGossip();
+      telegramOwner = new TelegramOwner();
+      log(`federation: enabled as host "${fedConfig.hostName}" (${fedConfig.hostLetter}); telegram-owner election active`);
+    } catch (err) {
+      log(`federation: failed to start (${err.message}) — continuing without the mesh`);
+      federation = null;
+      telegramOwner = null;
+    }
+  }
+
   // Watcher is created later (after we know the digest flush + onUpdate
   // callbacks), but the nickname registry and agent handler both need to
   // call into it. Single forward-declared holder both close over.
@@ -589,6 +633,8 @@ async function main() {
     target: registry,
     reactEmoji,
     react: setMessageReaction, // paced wrapper (#35) — inbound ack shares the send queue
+    owner: telegramOwner, // floating Telegram-owner election (#29); null when federation is off
+
     onStatusRequest: statusHandler,
     onNickRequest: nickHandler,
     onHelpRequest: helpHandler,
@@ -738,6 +784,7 @@ async function main() {
     await digest.flushAll();
     await poller.stop();
     await brain.stop();
+    if (federation) await federation.stop();
     await registry.stop();
     await watcher.stop();
     replyTracker.flush(); // sync flush of any debounced setImmediate save

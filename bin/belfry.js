@@ -84,12 +84,21 @@ async function main() {
   const mcpPort = Number(process.env.BELFRY_MCP_PORT || 49876);
   const transcribeKey = (process.env.BELFRY_TRANSCRIBE_KEY ?? '').trim();
   const transcribeProvider = (process.env.BELFRY_TRANSCRIBE_PROVIDER ?? '').trim() || undefined;
+  // Federation-only mode (#29): this node participates ONLY in the cross-host
+  // a2a mesh — it runs the loopback registry + the /fed listener but NEVER polls
+  // Telegram. A peer host (e.g. Erebus) that has no Telegram role must not start
+  // the poller: Telegram allows one getUpdates owner per bot, and the floating
+  // election would otherwise hand inbound replies to a daemon with no sessions
+  // to route them to. So in this mode we skip the poller, the outbound dashboard
+  // watcher, and the brain — the whole Telegram side — and serve the mesh only.
+  const fedOnly = /^(1|true|yes|on)$/i.test((process.env.BELFRY_FED_ONLY ?? '').trim());
   if (!botToken || !chatId) {
     log('missing BELFRY_TOKEN and/or BELFRY_CHAT_ID env vars — relay disabled');
     log('see README.md for setup. Common pattern: a launcher script reads from your secret store and exec-s belfry with the env vars set.');
     process.exit(1);
   }
   log(`telegram bot configured (chat ${chatId}${forumTopicId ? `, topic ${forumTopicId}` : ''})`);
+  if (fedOnly) log('BELFRY_FED_ONLY set — federation-only node: Telegram poller, watcher and brain disabled (mesh only)');
 
   // Single serial pacer for every outbound Telegram write (#35). belfry sends
   // to one chat, whose per-chat rate limit a `/all` fan-out (N replies + N
@@ -535,8 +544,10 @@ async function main() {
     systemPrompt: BRAIN_SYSTEM_PROMPT,
     log,
   });
-  brain.start();
-  log(`brain: spawned (cwd ${brainDir})`);
+  if (!fedOnly) {
+    brain.start();
+    log(`brain: spawned (cwd ${brainDir})`);
+  }
 
   // Bind the brain-backed summarizers now that brain exists. The
   // closure-captured object reference threaded into statusHandler /
@@ -651,8 +662,10 @@ async function main() {
     sendVoiceReply,
     log,
   });
-  poller.start();
-  log(`poller started (chat ${chatId})`);
+  if (!fedOnly) {
+    poller.start();
+    log(`poller started (chat ${chatId})`);
+  }
 
   // Outbound: chokidar watcher → throttle → composer → Telegram.
   const throttle = new Throttle({
@@ -775,8 +788,8 @@ async function main() {
     },
     log,
   });
-  watcher.start();
-  log('belfry up');
+  if (!fedOnly) watcher.start();
+  log(fedOnly ? 'belfry up (federation-only)' : 'belfry up');
 
   const shutdown = async (signal) => {
     log(`received ${signal} — shutting down`);

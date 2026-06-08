@@ -47,6 +47,7 @@ import { AgentRelayGuard } from '../lib/agent-relay-guard.js';
 import { parseFederationConfig } from '../lib/federation-config.js';
 import { wireFederation, DEFAULT_FED_PORT } from '../lib/federation-daemon.js';
 import { TelegramOwner } from '../lib/federation-owner.js';
+import { parseBridges } from '../lib/bridge.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -414,11 +415,21 @@ async function main() {
     const fedBind = (process.env.BELFRY_FED_BIND ?? '').trim() || '127.0.0.1';
     const fedPortEnv = Number(process.env.BELFRY_FED_PORT);
     const fedPort = fedPortEnv > 0 ? fedPortEnv : DEFAULT_FED_PORT;
+    // Webhook bridges (#29 Phase C): map a slug to a headless agent's HTTP
+    // endpoint so the mesh can deliver to it (and route its replies back).
+    let bridges = new Map();
+    try {
+      bridges = parseBridges({ env: process.env, file: config.bridges });
+      if (bridges.size) log(`federation: ${bridges.size} webhook bridge(s): ${[...bridges.keys()].join(', ')}`);
+    } catch (err) {
+      log(`federation: invalid bridge config (${err.message}) — bridges disabled`);
+    }
     try {
       federation = await wireFederation({
         registry,
         fedConfig,
         relayGuard,
+        bridges,
         bind: fedBind,
         port: fedPort,
         log,

@@ -143,6 +143,82 @@ test('ambiguous bare slug is rejected with candidates to qualify', async () => {
   assert.deepEqual(r.candidates.sort(), ['e/build', 'j/build']);
 });
 
+test('webhook bridge: mesh message → webhook POST, then /bridge/reply routes back to sender', async () => {
+  // Stand up a host "s" (NAS) whose `life-planner` slug is a webhook bridge, and
+  // a host "j" that sends to it. Full round-trip: j → s/life-planner (POSTed to
+  // the agent's webhook) → agent replies via /bridge/reply → back to j's session.
+  const [pJ, pS, pHook] = await Promise.all([freePort(), freePort(), freePort()]);
+
+  // Fake headless agent: captures the POSTed envelope, answers 200.
+  let captured = null;
+  const hook = createServer((req, res) => {
+    let b = '';
+    req.on('data', (c) => (b += c));
+    req.on('end', () => {
+      captured = JSON.parse(b);
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+  });
+  await new Promise((r) => hook.listen(pHook, '127.0.0.1', r));
+  const hookUrl = `http://127.0.0.1:${pHook}/api/inbox`;
+
+  const rJ = new Registry({ port: 0, authToken: null });
+  const rS = new Registry({ port: 0, authToken: null });
+  await Promise.all([rJ.start(), rS.start()]);
+  const fS = await wireFederation({
+    registry: rS, port: pS,
+    bridges: new Map([['life-planner', hookUrl]]),
+    fedConfig: { enabled: true, hostLetter: 's', hostName: 'Severin', token: TOKEN,
+      peers: [{ letter: 'j', name: 'Jinn', addr: `http://127.0.0.1:${pJ}` }] },
+  });
+  const fJ = await wireFederation({
+    registry: rJ, port: pJ,
+    fedConfig: { enabled: true, hostLetter: 'j', hostName: 'Jinn', token: TOKEN,
+      peers: [{ letter: 's', name: 'Severin', addr: `http://127.0.0.1:${pS}` }] },
+  });
+  const asker = fakeSession(rJ, 'asker');
+
+  try {
+    // j → s/life-planner: forwarded over the mesh, delivered to the webhook.
+    const r = await fJ.relayRemote('asker', 's/life-planner', 'what should I cook?');
+    assert.equal(r.ok, true);
+    assert.equal(r.delivered, 1, 'bridge counts a webhook POST as delivered');
+    assert.ok(captured, 'webhook received a POST');
+    assert.equal(captured.text, 'what should I cook?');
+    assert.deepEqual(captured.from, { host: 'j', slug: 'asker' }, 'envelope carries the original sender');
+    assert.ok(captured.correlationId, 'envelope carries a correlation id for the reply');
+
+    // The agent replies asynchronously via /bridge/reply on its local daemon (s).
+    const res = await fetch(`http://127.0.0.1:${rS.port}/bridge/reply`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ correlationId: captured.correlationId, text: 'try the risotto' }),
+    });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.to, 'j/asker', 'reply routed back to the original sender');
+
+    // The asker session on j received the reply as an agent message from the bridge.
+    const item = asker.queue[asker.queue.length - 1];
+    assert.equal(item.text, 'try the risotto');
+    assert.equal(item.origin, 'agent');
+    assert.equal(item.from, 's/life-planner');
+
+    // A stale/unknown correlation id is rejected (single-consume).
+    const res2 = await fetch(`http://127.0.0.1:${rS.port}/bridge/reply`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ correlationId: captured.correlationId, text: 'again?' }),
+    });
+    assert.equal(res2.status, 404, 'consumed correlation cannot be reused');
+  } finally {
+    await Promise.all([fJ.stop(), fS.stop()]);
+    await Promise.all([rJ.stop(), rS.stop()]);
+    await new Promise((r) => hook.close(r));
+  }
+});
+
 test('registry /send-to HTTP seam forwards a host-qualified target over the mesh', async () => {
   // Register a sender instance on Jinn's registry and drive the real HTTP route,
   // proving the relaxed to_slug regex + federationRouter wiring (not just the

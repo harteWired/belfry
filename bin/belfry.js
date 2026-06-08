@@ -94,11 +94,18 @@ async function main() {
   // watcher, and the brain — the whole Telegram side — and serve the mesh only.
   const fedOnly = /^(1|true|yes|on)$/i.test((process.env.BELFRY_FED_ONLY ?? '').trim());
   if (!botToken || !chatId) {
-    log('missing BELFRY_TOKEN and/or BELFRY_CHAT_ID env vars — relay disabled');
-    log('see README.md for setup. Common pattern: a launcher script reads from your secret store and exec-s belfry with the env vars set.');
-    process.exit(1);
+    // A federation-only node has no Telegram role, so it doesn't need the bot
+    // token to run — it's a pure multi-agent mesh node (registry + /fed). Only
+    // a Telegram-serving daemon requires the credentials.
+    if (!fedOnly) {
+      log('missing BELFRY_TOKEN and/or BELFRY_CHAT_ID env vars — relay disabled');
+      log('see README.md for setup. Common pattern: a launcher script reads from your secret store and exec-s belfry with the env vars set.');
+      process.exit(1);
+    }
+    log('BELFRY_FED_ONLY with no BELFRY_TOKEN/CHAT_ID — running as a pure mesh node (registry + federation only, no Telegram)');
+  } else {
+    log(`telegram bot configured (chat ${chatId}${forumTopicId ? `, topic ${forumTopicId}` : ''})`);
   }
-  log(`telegram bot configured (chat ${chatId}${forumTopicId ? `, topic ${forumTopicId}` : ''})`);
   if (fedOnly) log('BELFRY_FED_ONLY set — federation-only node: Telegram poller, watcher and brain disabled (mesh only)');
 
   // Single serial pacer for every outbound Telegram write (#35). belfry sends

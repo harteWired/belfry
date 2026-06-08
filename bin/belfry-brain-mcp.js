@@ -76,7 +76,7 @@ function log(msg) {
 const TOOLS = [
   {
     name: 'list_sessions',
-    description: 'Return active Claude Code sessions belfry knows about. Each row: slug, status, last_outbound_kind, last_outbound_ts.',
+    description: 'Return the Claude Code sessions belfry knows about. Each row: slug, reachable (true = a live session you can message via deliver/send_to; false = only observed via its status file), status, last_outbound_kind, last_outbound_ts.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {

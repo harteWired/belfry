@@ -48,6 +48,9 @@ import { parseFederationConfig } from '../lib/federation-config.js';
 import { wireFederation, DEFAULT_FED_PORT } from '../lib/federation-daemon.js';
 import { TelegramOwner } from '../lib/federation-owner.js';
 import { parseBridges } from '../lib/bridge.js';
+import { SubscriptionsStore } from '../lib/subscriptions-store.js';
+import { makeWatchHandler } from '../lib/watch-handler.js';
+import { answerCallbackQuery as rawAnswerCallbackQuery } from '../lib/telegram.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -78,6 +81,12 @@ async function main() {
     const slugs = Object.keys(config.subscriptions);
     log(`config: ${slugs.length} subscribed slug(s): ${slugs.join(', ') || '(none)'}`);
   }
+
+  // Live, persisted watch overrides (#40 — /watch from Telegram). Layers a
+  // machine-managed overrides file over the hand-edited belfry.jsonc and mutates
+  // config.subscriptions IN PLACE, so /watch toggles apply immediately (no
+  // restart) and the daemon's shouldFire reads the live state.
+  const subscriptionsStore = new SubscriptionsStore({ subscriptions: config.subscriptions, log });
 
   const botToken = (process.env.BELFRY_TOKEN ?? '').trim();
   const chatId = (process.env.BELFRY_CHAT_ID ?? '').trim();
@@ -464,6 +473,29 @@ async function main() {
   if (config.nicknames) nicknames.bootstrap(config.nicknames);
   log(`nicknames loaded: ${Object.keys(nicknames.list()).length} entr${Object.keys(nicknames.list()).length === 1 ? 'y' : 'ies'}`);
 
+  // /watch control panel (#40): manage proactive-ping subscriptions from
+  // Telegram — a tap-toggle keyboard + /watch /unwatch /watching commands,
+  // applied live via subscriptionsStore. Menu lists every known slug (dashboard
+  // ∪ registry) plus anything currently watched. answerCallbackQuery is called
+  // direct (not paced) so the button's spinner dismisses promptly; the in-place
+  // keyboard re-render goes through the paced editMessageText.
+  const watchHandler = makeWatchHandler({
+    store: subscriptionsStore,
+    getSlugs: () => {
+      const s = new Set();
+      if (watcher) for (const x of watcher.getActiveSlugs()) s.add(x);
+      for (const x of registry.knownSlugs()) s.add(x);
+      return s;
+    },
+    send: ({ text, replyToMessageId, replyMarkup }) =>
+      sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId, replyMarkup }),
+    editMessage: ({ messageId, text, replyMarkup }) =>
+      editMessageText({ botToken, chatId, messageId, text, replyMarkup }),
+    answerCallback: ({ callbackQueryId, text }) =>
+      rawAnswerCallbackQuery({ botToken, callbackQueryId, text }),
+    log,
+  });
+
   // Brain-backed summarizers. Constructed here so statusHandler can reference
   // them; they close over the `brain` variable (which is constructed below)
   // and use it lazily — every call resolves brain.isAlive() fresh.
@@ -669,6 +701,8 @@ async function main() {
     onHelpRequest: helpHandler,
     onApproval: approvalHandler,
     onResumeRequest: resumeHandler,
+    onWatchRequest: watchHandler.onRequest,
+    onWatchToggle: watchHandler.onToggle,
     onUnmatched: agentHandler,
     onFullExpand: fullExpandHandler,
     onBroadcast,

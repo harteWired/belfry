@@ -59,6 +59,8 @@ lib/composer.js            — 3-line mobile-friendly message builder
 lib/telegram.js            — Bot API HTTP helper (sendMessage)
 lib/throttle.js            — per-slug rate limiting + coalesce
 lib/config.js              — load + validate ~/.claude/belfry.jsonc
+lib/subscriptions-store.js — live, persisted watch overrides (#40): mutate config.subscriptions in place + ~/.claude/belfry-subscriptions.json
+lib/watch-handler.js       — /watch control panel: tap-toggle keyboard + /watch /unwatch /watching commands
 lib/reply-tracker.js       — outbound message_id → slug LRU
 lib/router.js              — incoming Telegram update → (slug, text, messageId)
 lib/poller.js              — Telegram getUpdates long-poll loop

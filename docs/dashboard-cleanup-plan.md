@@ -1,10 +1,12 @@
 # Dashboard junk cleanup — plan + Status-File Contract v1
 
-> **Status:** APPROVED in principle (Matt, 2026-06-09) — implementation delegated to the
-> projects to coordinate ("gossip") via the agent mesh. This file is belfry's durable
-> record so the plan + contract are restorable; the **canonical** contract home is
-> `claude-terminal-dashboard/docs/STATUS-FILE-CONTRACT.md` (vscode-enhancement to land it).
-> Tracks GitHub issue **#40**.
+> **Status:** APPROVED (Matt, 2026-06-09) — implementation delegated to the projects to
+> coordinate ("gossip") via the agent mesh. This file is belfry's durable record so the
+> plan + contract are restorable. The de-dup was sorted peer-to-peer: the **canonical hook
+> home is `claudelike-bar/hooks/`** (the published extension; its VSIX bundles
+> `dashboard-status.js` and `src/setup.ts` installs it — `claude-terminal-dashboard` was a
+> stale snapshot, retired). The **canonical contract home is
+> `claudelike-bar/docs/STATUS-FILE-CONTRACT.md`** (it follows the hook). Tracks issue **#40**.
 
 ## Problem
 The `/tmp/claude-dashboard/<slug>.json` convention accumulated ~61 entries, ~33 junk.
@@ -24,12 +26,12 @@ watched a near-empty `/tmp/claude-1000/claude-dashboard` while sessions wrote
 ## The fixes (7 items) + ownership
 | # | Fix | Owner |
 |---|---|---|
-| A | **Ancestor-walk** the index: from cwd, walk up to the nearest registered project root (stop at `/workspace`) → subdir terminals resolve to their real project. | vscode-enhancement (live `dashboard-status.js`) + belfry (`lib/slug.js`/belfry-hook) |
+| A | **Ancestor-walk** the index: from cwd, walk up to the nearest registered project root (stop at `/workspace`) → subdir terminals resolve to their real project. | vscode-enhancement authors the hook → claudelike-bar commits it; belfry (`lib/slug.js`/belfry-hook) |
 | B | **Skip on no-match** (STRICT): no env + no ancestor → write no file. Flag-gated, default-on, legacy escape hatch. | same |
 | C | **Stale GC**: drop `*.json` older than N days AND not tracked AND not in index/config (conservative); sweep `.tmp.<pid>`; never reap pinned/autoStart/path-bearing. | claudelike-bar |
 | D | **Config-list hygiene**: stop `ensureEntry` persisting transient terminal names. | claudelike-bar |
-| E | **Unify the dir/slug/sanitize CONTRACT** (below) — one spec, three implementations. | vscode-enhancement drafts; belfry + CLB conform |
-| F | **De-dup the hook** — one canonical home (`claude-terminal-dashboard`); delete/symlink the stale CLB copy. | vscode-enhancement |
+| E | **Unify the dir/slug/sanitize CONTRACT** (below) — one spec, three implementations. | claudelike-bar lands the spec; belfry + the hook conform |
+| F | **De-dup the hook** — canonical home is **`claudelike-bar/hooks/`** (published-extension source of truth); retire the stale `claude-terminal-dashboard` snapshot. **Resolved P2P.** | vscode-enhancement *authors* the reconciled hook → claudelike-bar *commits* it |
 | G | **One-time cleanup** — sweep 33 junk + stale + 10MB `debug.log` [CLB]; remove the 4 `belfry-hook-test/bad-*` files + ensure belfry sessions set `CLAUDELIKE_BAR_NAME` [belfry]. | split |
 
 **Constraints:** layout-agnostic gate (env-or-index, NOT hardcoded `/workspace/projects`);

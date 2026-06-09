@@ -4,7 +4,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawn } from 'node:child_process';
-import { runHook, statusFromEvent, tailTranscript } from '../bin/belfry-hook.js';
+
+// Isolate the dashboard dir to a temp path BEFORE importing the hook, so its
+// module-level STATUS_DIR (which honors CLAUDE_DASHBOARD_DIR) writes here and
+// not into the real /tmp/claude-dashboard the live daemon watches.
+const DASH_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'belfry-hook-dash-'));
+process.env.CLAUDE_DASHBOARD_DIR = DASH_DIR;
+const { runHook, statusFromEvent, tailTranscript } = await import('../bin/belfry-hook.js');
 
 function tmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -109,7 +115,7 @@ test('runHook writes the convention JSON atomically', async () => {
   });
   assert.equal(result.slug, slug);
 
-  const writtenPath = path.join(os.tmpdir(), 'claude-dashboard', `${slug}.json`);
+  const writtenPath = path.join(DASH_DIR, `${slug}.json`);
   const written = JSON.parse(fs.readFileSync(writtenPath, 'utf8'));
   assert.equal(written.status, 'ready');
   assert.equal(written.event, 'Stop');
@@ -259,6 +265,6 @@ test('runHook tolerates malformed stdin', async () => {
   assert.equal(result.slug, slug);
   // Status defaults to idle when no event is supplied.
   assert.equal(result.payload.status, 'idle');
-  const writtenPath = path.join(os.tmpdir(), 'claude-dashboard', `${slug}.json`);
+  const writtenPath = path.join(DASH_DIR, `${slug}.json`);
   fs.unlinkSync(writtenPath);
 });

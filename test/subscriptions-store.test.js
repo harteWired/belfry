@@ -78,6 +78,13 @@ test('list returns sorted watched slugs', () => {
   assert.deepEqual(store.list(), ['a', 'b']);
 });
 
+test('managedSlugs includes both watched and explicitly-unwatched slugs', () => {
+  const store = new SubscriptionsStore({ subscriptions: { kept: { events: ['ready'] } }, persistPath: tmp() });
+  store.watch('added');
+  store.unwatch('removed'); // explicit-off override — must still be "managed"
+  assert.deepEqual(store.managedSlugs().sort(), ['added', 'kept', 'removed']);
+});
+
 test('missing overrides file is a no-op', () => {
   const subs = { api: { events: ['ready'] } };
   const store = new SubscriptionsStore({ subscriptions: subs, persistPath: path.join(os.tmpdir(), 'does-not-exist-belfry.json') });

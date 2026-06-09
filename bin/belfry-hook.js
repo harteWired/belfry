@@ -30,7 +30,13 @@ import { fileURLToPath } from 'node:url';
 import { Buffer } from 'node:buffer';
 import { deriveSlug } from '../lib/slug.js';
 
-const STATUS_DIR = join(tmpdir(), 'claude-dashboard');
+// Convention path is the LITERAL /tmp/claude-dashboard (docs/CONVENTION.md), not
+// os.tmpdir()/claude-dashboard — Claude Code sets TMPDIR=/tmp/claude-<uid> per
+// session, so os.tmpdir() would write a different dir than the daemon watches.
+// Honor CLAUDE_DASHBOARD_DIR; default to the convention on POSIX, os.tmpdir() on
+// Windows. Must stay in lock-step with lib/watcher.js.
+const STATUS_DIR = (process.env.CLAUDE_DASHBOARD_DIR || '').trim()
+  || (process.platform === 'win32' ? join(tmpdir(), 'claude-dashboard') : '/tmp/claude-dashboard');
 // Tail buffer for transcript reads. Large enough to capture a typical final
 // exchange (last user prompt + last assistant response), small enough that
 // the synchronous read on the hook's hot path is bounded regardless of how

@@ -8,12 +8,14 @@ import { makeWatchHandler, watchKeyboard } from '../lib/watch-handler.js';
 
 function fakeStore(initial = {}) {
   const subs = { ...initial };
+  const off = new Set();
   return {
     isWatched: (s) => Boolean(subs[s]),
-    watch: (s, ev) => (subs[s] = { events: ev }),
-    unwatch: (s) => { delete subs[s]; },
-    toggle(s) { if (subs[s]) { delete subs[s]; return false; } subs[s] = { events: ['ready', 'error'] }; return true; },
+    watch: (s, ev) => { off.delete(s); return (subs[s] = { events: ev }); },
+    unwatch: (s) => { delete subs[s]; off.add(s); },
+    toggle(s) { if (subs[s]) { delete subs[s]; off.add(s); return false; } off.delete(s); subs[s] = { events: ['ready', 'error'] }; return true; },
     list: () => Object.keys(subs).filter((k) => subs[k]).sort(),
+    managedSlugs: () => [...new Set([...Object.keys(subs).filter((k) => subs[k]), ...off])],
   };
 }
 
@@ -87,8 +89,19 @@ test('Done closes the menu (clears the keyboard)', async () => {
   assert.match(answered[0].text, /Done/);
 });
 
-test('watchKeyboard sorts watched-first then alphabetical', () => {
+test('an unwatched project stays in the menu so it can be re-watched', async () => {
+  // git is watched but NOT a live/known slug (getSlugs is just ['api']).
+  const store = fakeStore({ git: { events: ['ready'] } });
+  const { h, edited } = harness(store, ['api']);
+  await h.onToggle({ callbackQueryId: 'c1', slug: 'git', messageId: 5 });
+  assert.equal(store.isWatched('git'), false, 'unwatched');
+  const cbs = edited[0].replyMarkup.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(cbs.includes('belfry:watch:git'), 'unwatched project still in the re-rendered menu (was vanishing before)');
+});
+
+test('watchKeyboard uses stable alphabetical order regardless of watch state', () => {
   const kb = watchKeyboard(['zeta', 'alpha', 'mid'], (s) => s === 'zeta');
-  assert.equal(kb.inline_keyboard[0][0].callback_data, 'belfry:watch:zeta');
-  assert.equal(kb.inline_keyboard[1][0].callback_data, 'belfry:watch:alpha');
+  assert.equal(kb.inline_keyboard[0][0].callback_data, 'belfry:watch:alpha');
+  assert.equal(kb.inline_keyboard[1][0].callback_data, 'belfry:watch:mid');
+  assert.equal(kb.inline_keyboard[2][0].callback_data, 'belfry:watch:zeta');
 });

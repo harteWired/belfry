@@ -238,3 +238,40 @@ test('registry /send-to HTTP seam forwards a host-qualified target over the mesh
   assert.equal(body.host, 'e');
   assert.equal(erebusSession.queue[before].text, 'via http');
 });
+
+test('gossip propagates a host owner reachableAt to the peer (#38 advertising path)', async () => {
+  // A self-contained pair with owners, so we exercise the announceOnce →
+  // buildEnvelope(reachableAt) → onAnnounce → PeerRegistry.reachableAt seam
+  // end-to-end (the existing fedJ/fedE were wired without owners).
+  const [pA, pB] = await Promise.all([freePort(), freePort()]);
+  const stamp = Date.now(); // fresh so it's within the confirm TTL under the real clock
+  const ownerA = { reachableAt: stamp }; // pretend A's poller just reached Telegram
+  const rA = new Registry({ port: 0, authToken: null });
+  const rB = new Registry({ port: 0, authToken: null });
+  await Promise.all([rA.start(), rB.start()]);
+  const fA = await wireFederation({
+    registry: rA, port: pA, owner: ownerA,
+    fedConfig: {
+      enabled: true, hostLetter: 'a', hostName: 'A', token: TOKEN, priority: 1,
+      peers: [{ letter: 'b', name: 'B', addr: `http://127.0.0.1:${pB}`, priority: 2 }],
+    },
+  });
+  const fB = await wireFederation({
+    registry: rB, port: pB, owner: { reachableAt: 0 },
+    fedConfig: {
+      enabled: true, hostLetter: 'b', hostName: 'B', token: TOKEN, priority: 2,
+      peers: [{ letter: 'a', name: 'A', addr: `http://127.0.0.1:${pA}`, priority: 1 }],
+    },
+  });
+  try {
+    await fA.announceOnce();
+    assert.equal(fB.peerRegistry.peer('a')?.reachableAt, stamp, 'B learns A reachableAt');
+    // B (priority 2) sees a live, recently-reachable higher-priority peer A → preempted.
+    assert.equal(fB.isPreempted(), true);
+    // A (priority 1, top) is never preempted regardless.
+    assert.equal(fA.isPreempted(), false);
+  } finally {
+    await Promise.all([fA.stop(), fB.stop()]);
+    await Promise.all([rA.stop(), rB.stop()]);
+  }
+});

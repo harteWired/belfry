@@ -50,6 +50,22 @@ test('ownerMap merges self slugs and live peers, with collisions as a set', () =
   assert.deepEqual([...map.get('erebus-only')].sort(), ['e']);
 });
 
+test('stores reachableAt from the announcement (#38)', () => {
+  const c = clock();
+  const r = new PeerRegistry({ selfLetter: 'd', now: c.now });
+  r.applyAnnouncement({ letter: 'e', slugs: ['api'], reachableAt: 123456 });
+  assert.equal(r.peer('e').reachableAt, 123456);
+});
+
+test('reachableAt defaults to 0 when absent or invalid', () => {
+  const c = clock();
+  const r = new PeerRegistry({ selfLetter: 'd', now: c.now });
+  r.applyAnnouncement({ letter: 'e', slugs: ['api'] });
+  assert.equal(r.peer('e').reachableAt, 0);
+  r.applyAnnouncement({ letter: 'n', slugs: ['x'], reachableAt: -5 });
+  assert.equal(r.peer('n').reachableAt, 0);
+});
+
 test('ownerMap omits stale peers', () => {
   const c = clock();
   const r = new PeerRegistry({ selfLetter: 'd', ttlMs: 1000, now: c.now });

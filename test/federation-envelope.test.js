@@ -27,6 +27,20 @@ test('announce carries host + slugs, no to/text', () => {
   assert.deepEqual(e, { v: ENVELOPE_VERSION, kind: 'announce', from: { host: 'd' }, slugs: ['api', 'belfry'], ts: 5 });
 });
 
+test('announce carries reachableAt when set, omits it otherwise (#38)', () => {
+  const withTs = buildEnvelope({ kind: 'announce', from: { host: 'd' }, slugs: ['api'], reachableAt: 999, ts: 5 });
+  assert.equal(withTs.reachableAt, 999);
+  // round-trips on the wire
+  const parsed = parseEnvelope(JSON.parse(JSON.stringify(withTs)));
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.envelope.reachableAt, 999);
+  // absent / non-positive → field omitted entirely
+  const without = buildEnvelope({ kind: 'announce', from: { host: 'd' }, slugs: ['api'], ts: 5 });
+  assert.equal('reachableAt' in without, false);
+  const zero = buildEnvelope({ kind: 'announce', from: { host: 'd' }, slugs: ['api'], reachableAt: 0, ts: 5 });
+  assert.equal('reachableAt' in zero, false);
+});
+
 test('rejects unknown kinds and malformed endpoints', () => {
   assert.throws(() => buildEnvelope({ kind: 'bogus', from, to, text: 'x' }), /unknown kind/);
   assert.throws(() => buildEnvelope({ kind: 'message', from: { host: 'dd', slug: 'a' }, to, text: 'x' }), /from must be/);

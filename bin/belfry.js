@@ -441,18 +441,23 @@ async function main() {
       log(`federation: invalid bridge config (${err.message}) — bridges disabled`);
     }
     try {
+      // The owner state machine is created BEFORE wireFederation so the gossip
+      // loop can advertise its `reachableAt` and the priority gate can read it
+      // (#38). The same instance is handed to the Poller below.
+      telegramOwner = new TelegramOwner();
       federation = await wireFederation({
         registry,
         fedConfig,
         relayGuard,
         bridges,
+        owner: telegramOwner,
         bind: fedBind,
         port: fedPort,
         log,
       });
       federation.startGossip();
-      telegramOwner = new TelegramOwner();
-      log(`federation: enabled as host "${fedConfig.hostName}" (${fedConfig.hostLetter}); telegram-owner election active`);
+      const prio = fedConfig.priority == null ? 'unprioritized' : `priority ${fedConfig.priority}`;
+      log(`federation: enabled as host "${fedConfig.hostName}" (${fedConfig.hostLetter}); telegram-owner election active (${prio})`);
     } catch (err) {
       log(`federation: failed to start (${err.message}) — continuing without the mesh`);
       federation = null;
@@ -695,6 +700,7 @@ async function main() {
     reactEmoji,
     react: setMessageReaction, // paced wrapper (#35) — inbound ack shares the send queue
     owner: telegramOwner, // floating Telegram-owner election (#29); null when federation is off
+    isPreempted: federation?.isPreempted ?? null, // priority gate (#38); null when federation/priority off
 
     onStatusRequest: statusHandler,
     onNickRequest: nickHandler,

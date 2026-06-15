@@ -8,11 +8,18 @@
 // Identity + secrets are best supplied via env (override the file per field):
 //   BELFRY_HOST_LETTER   single [a-z0-9] — this host's address prefix (required to enable)
 //   BELFRY_HOST_NAME     display name (defaults to the letter)
+//   BELFRY_HOST_PRIORITY non-negative int — Telegram-owner priority (#38). LOWER
+//                        = higher priority (1 = primary). When set on ≥2 hosts the
+//                        highest-priority *reachable* host owns the bot and lower
+//                        ones stand by, taking over on failure and handing back on
+//                        recovery. Unset → pure 409 election (no ranking).
 //   BELFRY_FED_TOKEN     per-daemon bearer for inter-daemon auth (secret → env only).
 //                        REQUIRED to enable: without it the daemon refuses to start
 //                        an unauthenticated mesh listener and federation stays off.
 //   BELFRY_FED_PEERS     compact peer list overriding `peers` below, e.g.
 //                        "e,Erebus,http://erebus.your-tailnet.ts.net:49878;s,Severin,http://severin.your-tailnet.ts.net:49878"
+//                        Append a 4th field for a peer's priority (#38), e.g.
+//                        "e,Erebus,http://erebus...:49878,2;s,Severin,http://severin...:49878,3"
 //   BELFRY_FED_PORT      local /fed/* listener port (default 49878)
 //   BELFRY_FED_BIND      local /fed/* bind address (default 127.0.0.1; set to the
 //                        Tailscale interface or 0.0.0.0 to accept peer connections)
@@ -26,14 +33,19 @@
     "hostLetter": "a",
     "hostName": "host-a",
 
+    // Telegram-owner priority (#38), optional. LOWER = higher priority. Set it
+    // here (or via BELFRY_HOST_PRIORITY) on every host that should participate in
+    // ranked ownership; omit to fall back to the unranked 409 election.
+    "priority": 1,
+
     // The other daemons in your mesh. `addr` is each peer's /fed/* listener URL
     // (its BELFRY_FED_PORT — a SEPARATE, token-gated server from the loopback
     // registry on 49876), reached over your private network (a Tailscale
     // MagicDNS name or 100.x address). Letters must be unique and differ from
-    // this host's.
+    // this host's. `priority` (optional, #38) is that peer's ownership rank.
     "peers": [
-      { "letter": "b", "name": "host-b", "addr": "http://host-b.your-tailnet.ts.net:49878" },
-      { "letter": "c", "name": "host-c", "addr": "http://host-c.your-tailnet.ts.net:49878" }
+      { "letter": "b", "name": "host-b", "addr": "http://host-b.your-tailnet.ts.net:49878", "priority": 2 },
+      { "letter": "c", "name": "host-c", "addr": "http://host-c.your-tailnet.ts.net:49878", "priority": 3 }
     ]
   }
 }

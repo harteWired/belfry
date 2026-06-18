@@ -420,6 +420,11 @@ async function main() {
   let federation = null;
   let telegramOwner = null;
   let fedConfig = { enabled: false };
+  // The local identity the bot wears on the mesh for human→federated-session DMs
+  // (#44). A peer reply addressed to this slug is posted to the chat rather than
+  // injected into a (nonexistent) local session. Configurable; default "telegram".
+  const fedBridgeSlug = (config.federation && typeof config.federation.telegramBridgeSlug === 'string'
+    && config.federation.telegramBridgeSlug.trim()) || 'telegram';
   try {
     fedConfig = parseFederationConfig({ env: process.env, file: config.federation });
   } catch (err) {
@@ -450,6 +455,16 @@ async function main() {
         fedConfig,
         relayGuard,
         bridges,
+        // Return leg of a human→federated-session DM (#44): a peer reply to the
+        // bridge slug is posted to the chat via the normal outbound path, which
+        // records the reply-tracker mapping so a quote-reply continues the thread.
+        telegramBridge: {
+          slug: fedBridgeSlug,
+          deliver: async (fromQualified, text) => {
+            await sendOutbound({ slug: fromQualified, text, replyToMessageId: null });
+            return { delivered: 1 };
+          },
+        },
         owner: telegramOwner,
         bind: fedBind,
         port: fedPort,
@@ -692,11 +707,37 @@ async function main() {
     log('voice transcription disabled (BELFRY_TRANSCRIBE_KEY not set) — voice notes will be acknowledged but dropped');
   }
 
+  // Federation-aware delivery target (#44): a routed slug carrying a host prefix
+  // (`<letter>/<slug>`) is a session on a peer host — forward it over the mesh
+  // from the Telegram bridge identity so the reply routes back to this chat.
+  // Bare slugs deliver locally exactly as before. Local slugs never contain a
+  // slash, so the test is unambiguous.
+  const FED_SLUG_RE = /^[a-z0-9]\/[a-z0-9][a-z0-9._-]*$/i;
+  const deliveryTarget = {
+    deliver(slug, text, originatingMessageId = null, attachment = null) {
+      if (FED_SLUG_RE.test(slug)) {
+        if (!federation) {
+          log(`deliver: "${slug}" is a federated address but federation is off — dropping`);
+          return 0;
+        }
+        if (attachment) log(`deliver: dropping attachment for federated "${slug}" (text-only over the bridge)`);
+        federation.relayRemote(fedBridgeSlug, slug, text)
+          .then((r) => {
+            if (r && r.handled && !r.ok) log(`deliver: federated relay to ${slug} failed: ${r.reason}`);
+            else if (r && !r.handled) log(`deliver: federated relay to ${slug} fell through (unknown/local)`);
+          })
+          .catch((err) => log(`deliver: federated relay to ${slug} threw: ${err.message}`));
+        return 1; // optimistic — the async relay logs any failure
+      }
+      return registry.deliver(slug, text, originatingMessageId, attachment);
+    },
+  };
+
   const poller = new Poller({
     botToken,
     expectedChatId: Number(chatId),
     replyTracker,
-    target: registry,
+    target: deliveryTarget,
     reactEmoji,
     react: setMessageReaction, // paced wrapper (#35) — inbound ack shares the send queue
     owner: telegramOwner, // floating Telegram-owner election (#29); null when federation is off

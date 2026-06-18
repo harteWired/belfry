@@ -29,6 +29,25 @@ function update({ chatId = CHAT, text, replyToId } = {}) {
   return { message };
 }
 
+test('nick-set accepts a host-qualified federation target (#44)', () => {
+  const r = route({ update: update({ text: '/nick keeper e/erebus-master' }), ...ctx() });
+  assert.deepEqual(
+    { action: r.action, nickname: r.nickname, slug: r.slug },
+    { action: 'nick-set', nickname: 'keeper', slug: 'e/erebus-master' },
+  );
+});
+
+test('a nickname resolving to a federated address routes deliver to that address (#44)', () => {
+  const r = route({
+    update: update({ text: '/keeper status?' }),
+    ...ctx({ nicknames: { keeper: 'e/erebus-master' } }),
+  });
+  assert.deepEqual(
+    { action: r.action, slug: r.slug, text: r.text },
+    { action: 'deliver', slug: 'e/erebus-master', text: 'status?' },
+  );
+});
+
 test('drops messages from unexpected chat', () => {
   const r = route({ update: update({ chatId: 99999, text: 'hi' }), ...ctx() });
   assert.equal(r, null);

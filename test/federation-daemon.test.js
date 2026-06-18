@@ -239,6 +239,57 @@ test('registry /send-to HTTP seam forwards a host-qualified target over the mesh
   assert.equal(erebusSession.queue[before].text, 'via http');
 });
 
+test('telegram bridge: human→federated-session DM round-trips both legs (#44)', async () => {
+  // J runs a telegram bridge (slug "telegram"); E runs a real session. Forward
+  // leg: the bot relays a Telegram message from the bridge to e/erebus-sess.
+  // Reply leg: the session answers via the mesh to j/telegram, and J's onMessage
+  // hands it to the bridge (which is what posts it to the chat in production).
+  const [pA, pB] = await Promise.all([freePort(), freePort()]);
+  const captured = [];
+  const rJ2 = new Registry({ port: 0, authToken: null });
+  const rE2 = new Registry({ port: 0, authToken: null });
+  await Promise.all([rJ2.start(), rE2.start()]);
+  const fJ2 = await wireFederation({
+    registry: rJ2, port: pA,
+    telegramBridge: {
+      slug: 'telegram',
+      deliver: (fromQualified, text) => { captured.push({ from: fromQualified, text }); return { delivered: 1 }; },
+    },
+    fedConfig: {
+      enabled: true, hostLetter: 'j', hostName: 'Jinn', token: TOKEN,
+      peers: [{ letter: 'e', name: 'Erebus', addr: `http://127.0.0.1:${pB}` }],
+    },
+  });
+  const fE2 = await wireFederation({
+    registry: rE2, port: pB,
+    fedConfig: {
+      enabled: true, hostLetter: 'e', hostName: 'Erebus', token: TOKEN,
+      peers: [{ letter: 'j', name: 'Jinn', addr: `http://127.0.0.1:${pA}` }],
+    },
+  });
+  const sess = fakeSession(rE2, 'erebus-sess');
+  try {
+    // Forward leg: /keeper resolves to e/erebus-sess; the bot relays it FROM the
+    // bridge so the session's reply has somewhere to go.
+    const fwd = await fJ2.relayRemote('telegram', 'e/erebus-sess', 'hi from the human');
+    assert.equal(fwd.ok, true);
+    assert.equal(fwd.delivered, 1);
+    const item = sess.queue[sess.queue.length - 1];
+    assert.equal(item.text, 'hi from the human');
+    assert.equal(item.from, 'j/telegram', 'session sees the bridge as the sender, so it can reply back');
+
+    // Reply leg: the session answers j/telegram; J routes it to the bridge, not
+    // a (nonexistent) local "telegram" session.
+    const back = await fE2.relayRemote('erebus-sess', 'j/telegram', 'pong to the chat');
+    assert.equal(back.ok, true);
+    assert.equal(back.delivered, 1, 'the bridge counts the chat post as delivered');
+    assert.deepEqual(captured.at(-1), { from: 'e/erebus-sess', text: 'pong to the chat' });
+  } finally {
+    await Promise.all([fJ2.stop(), fE2.stop()]);
+    await Promise.all([rJ2.stop(), rE2.stop()]);
+  }
+});
+
 test('gossip propagates a host owner reachableAt to the peer (#38 advertising path)', async () => {
   // A self-contained pair with owners, so we exercise the announceOnce →
   // buildEnvelope(reachableAt) → onAnnounce → PeerRegistry.reachableAt seam

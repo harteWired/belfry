@@ -19,6 +19,7 @@ import { SendQueue, DEFAULT_SEND_INTERVAL_MS } from '../lib/send-queue.js';
 import { ReplyTracker } from '../lib/reply-tracker.js';
 import { Registry } from '../lib/registry.js';
 import { Poller } from '../lib/poller.js';
+import { makeDeliveryTarget } from '../lib/delivery-target.js';
 import { maybeAutoReply } from '../lib/auto-reply.js';
 import { makeBrainSummarizers } from '../lib/brain-summarize.js';
 import { makeStatusHandler } from '../lib/status-handler.js';
@@ -710,28 +711,10 @@ async function main() {
   // Federation-aware delivery target (#44): a routed slug carrying a host prefix
   // (`<letter>/<slug>`) is a session on a peer host — forward it over the mesh
   // from the Telegram bridge identity so the reply routes back to this chat.
-  // Bare slugs deliver locally exactly as before. Local slugs never contain a
-  // slash, so the test is unambiguous.
-  const FED_SLUG_RE = /^[a-z0-9]\/[a-z0-9][a-z0-9._-]*$/i;
-  const deliveryTarget = {
-    deliver(slug, text, originatingMessageId = null, attachment = null) {
-      if (FED_SLUG_RE.test(slug)) {
-        if (!federation) {
-          log(`deliver: "${slug}" is a federated address but federation is off — dropping`);
-          return 0;
-        }
-        if (attachment) log(`deliver: dropping attachment for federated "${slug}" (text-only over the bridge)`);
-        federation.relayRemote(fedBridgeSlug, slug, text)
-          .then((r) => {
-            if (r && r.handled && !r.ok) log(`deliver: federated relay to ${slug} failed: ${r.reason}`);
-            else if (r && !r.handled) log(`deliver: federated relay to ${slug} fell through (unknown/local)`);
-          })
-          .catch((err) => log(`deliver: federated relay to ${slug} threw: ${err.message}`));
-        return 1; // optimistic — the async relay logs any failure
-      }
-      return registry.deliver(slug, text, originatingMessageId, attachment);
-    },
-  };
+  // Bare slugs deliver locally exactly as before. The wrapper proxies the full
+  // Poller `target` interface (deliver + hasSlug + knownSlugs); see
+  // lib/delivery-target.js.
+  const deliveryTarget = makeDeliveryTarget({ registry, federation, fedBridgeSlug, log });
 
   const poller = new Poller({
     botToken,

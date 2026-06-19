@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process';
 // not into the real /tmp/claude-dashboard the live daemon watches.
 const DASH_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'belfry-hook-dash-'));
 process.env.CLAUDE_DASHBOARD_DIR = DASH_DIR;
-const { runHook, statusFromEvent, tailTranscript } = await import('../bin/belfry-hook.js');
+const { runHook, statusFromEvent, tailTranscript, resolveStatusDir } = await import('../bin/belfry-hook.js');
 
 function tmpDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -267,4 +267,109 @@ test('runHook tolerates malformed stdin', async () => {
   assert.equal(result.payload.status, 'idle');
   const writtenPath = path.join(DASH_DIR, `${slug}.json`);
   fs.unlinkSync(writtenPath);
+});
+
+// --- Status-File Contract v1 (#40) ---
+
+test('resolveStatusDir precedence: CLAUDELIKE_STATUS_DIR > CLAUDE_DASHBOARD_DIR > default', () => {
+  assert.equal(
+    resolveStatusDir({ CLAUDELIKE_STATUS_DIR: '/a', CLAUDE_DASHBOARD_DIR: '/b' }),
+    '/a',
+    'canonical env wins over the deprecated alias',
+  );
+  assert.equal(
+    resolveStatusDir({ CLAUDE_DASHBOARD_DIR: '/b' }),
+    '/b',
+    'alias is honored during transition',
+  );
+  const dflt = resolveStatusDir({});
+  if (process.platform === 'win32') {
+    assert.match(dflt, /claude-dashboard$/);
+  } else {
+    assert.equal(dflt, '/tmp/claude-dashboard', 'POSIX default is the fixed literal');
+  }
+});
+
+test('runHook STRICT: unregistered dir with no env mints no status file (skipped)', async () => {
+  // A path with no registered ancestor in the real ~/.claude index. (runHook
+  // resolves against os.homedir(), so use a dir nothing could have registered.)
+  const cwd = path.join(os.tmpdir(), `belfry-strict-nomatch-${process.pid}-${Date.now()}`, 'deep', 'subdir');
+  const result = await runHook({
+    stdinText: JSON.stringify({ hook_event_name: 'Stop', cwd }),
+    env: {}, // no CLAUDE_SESSION_SLUG → STRICT declines
+    cwdDefault: cwd,
+  });
+  assert.equal(result.slug, null);
+  assert.equal(result.skipped, true);
+});
+
+test('runHook LEGACY (CLAUDELIKE_BAR_STRICT=0): unregistered dir falls back to basename', async () => {
+  const result = await runHook({
+    stdinText: JSON.stringify({ hook_event_name: 'Stop', cwd: '/tmp/some-legacy-dir' }),
+    env: { CLAUDELIKE_BAR_STRICT: '0' },
+    cwdDefault: '/tmp/some-legacy-dir',
+  });
+  assert.equal(result.slug, 'some-legacy-dir');
+  fs.unlinkSync(path.join(DASH_DIR, 'some-legacy-dir.json'));
+});
+
+test('writeAtomic read-merge: preserves foreign fields, refreshes owned fields', async () => {
+  const slug = `belfry-hook-merge-${process.pid}-${Date.now()}`;
+  const filePath = path.join(DASH_DIR, `${slug}.json`);
+  // Simulate the claudelike-bar statusline having written context_percent +
+  // a now-stale last_response.
+  fs.writeFileSync(filePath, JSON.stringify({
+    context_percent: 42,
+    status: 'working',
+    last_response: 'STALE from a prior turn',
+  }));
+
+  const dir = tmpDir('belfry-hook-merge-');
+  const transcriptPath = path.join(dir, 't.jsonl');
+  fs.writeFileSync(
+    transcriptPath,
+    JSON.stringify({ message: { role: 'user', content: 'fresh prompt' } }) + '\n' +
+    JSON.stringify({ message: { role: 'assistant', content: 'fresh response' } }) + '\n',
+  );
+  await runHook({
+    stdinText: JSON.stringify({ hook_event_name: 'Stop', cwd: '/whatever', transcript_path: transcriptPath }),
+    env: { CLAUDE_SESSION_SLUG: slug },
+  });
+
+  const written = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  assert.equal(written.context_percent, 42, 'foreign field preserved');
+  assert.equal(written.status, 'ready', 'owned field refreshed');
+  assert.equal(written.last_response, 'fresh response', 'owned field overwritten, not stale');
+
+  fs.unlinkSync(filePath);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('writeAtomic read-merge: a pure-tool turn CLEARS a stale owned field but keeps foreign', async () => {
+  const slug = `belfry-hook-clear-${process.pid}-${Date.now()}`;
+  const filePath = path.join(DASH_DIR, `${slug}.json`);
+  fs.writeFileSync(filePath, JSON.stringify({
+    context_percent: 7,
+    last_response: 'STALE — should be cleared',
+  }));
+
+  const dir = tmpDir('belfry-hook-clear-');
+  const transcriptPath = path.join(dir, 't.jsonl');
+  // Pure-tool turn: no assistant text block → tail yields no last_response.
+  fs.writeFileSync(transcriptPath, [
+    JSON.stringify({ message: { role: 'user', content: [{ type: 'text', text: 'do it' }] } }),
+    JSON.stringify({ message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash' }] } }),
+    JSON.stringify({ message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'a', content: 'r' }] } }),
+  ].join('\n') + '\n');
+  await runHook({
+    stdinText: JSON.stringify({ hook_event_name: 'Stop', cwd: '/whatever', transcript_path: transcriptPath }),
+    env: { CLAUDE_SESSION_SLUG: slug },
+  });
+
+  const written = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  assert.equal(written.context_percent, 7, 'foreign field preserved');
+  assert.equal(written.last_response, undefined, 'stale owned field cleared, not inherited');
+
+  fs.unlinkSync(filePath);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

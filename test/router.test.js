@@ -29,6 +29,25 @@ function update({ chatId = CHAT, text, replyToId } = {}) {
   return { message };
 }
 
+test('nick-set accepts a host-qualified federation target (#44)', () => {
+  const r = route({ update: update({ text: '/nick keeper e/erebus-master' }), ...ctx() });
+  assert.deepEqual(
+    { action: r.action, nickname: r.nickname, slug: r.slug },
+    { action: 'nick-set', nickname: 'keeper', slug: 'e/erebus-master' },
+  );
+});
+
+test('a nickname resolving to a federated address routes deliver to that address (#44)', () => {
+  const r = route({
+    update: update({ text: '/keeper status?' }),
+    ...ctx({ nicknames: { keeper: 'e/erebus-master' } }),
+  });
+  assert.deepEqual(
+    { action: r.action, slug: r.slug, text: r.text },
+    { action: 'deliver', slug: 'e/erebus-master', text: 'status?' },
+  );
+});
+
 test('drops messages from unexpected chat', () => {
   const r = route({ update: update({ chatId: 99999, text: 'hi' }), ...ctx() });
   assert.equal(r, null);
@@ -509,4 +528,48 @@ test('"all" is reserved on the prefix path (never delivers to a session named al
   // failed; ensure a session literally named "all" can't be hit via prefix.
   const r = route({ update: update({ text: '/all do thing' }), ...ctx({ knownSlugs: ['all'] }) });
   assert.equal(r.action, 'broadcast', 'still a broadcast, never a deliver to slug "all"');
+});
+
+// --- /watch subscription control (#40) ---
+
+test('/watch (bare) opens the watch menu', () => {
+  const r = route({ update: update({ text: '/watch' }), ...ctx() });
+  assert.equal(r.action, 'watch-menu');
+});
+
+test('watch (no slash) opens the menu too', () => {
+  const r = route({ update: update({ text: 'watch' }), ...ctx() });
+  assert.equal(r.action, 'watch-menu');
+});
+
+test('/watch <slug> → watch-set with no explicit events', () => {
+  const r = route({ update: update({ text: '/watch api' }), ...ctx() });
+  assert.equal(r.action, 'watch-set');
+  assert.equal(r.slug, 'api');
+  assert.equal(r.events, null);
+});
+
+test('/watch <slug> <events> parses the event list', () => {
+  const r = route({ update: update({ text: '/watch api ready,error' }), ...ctx() });
+  assert.equal(r.action, 'watch-set');
+  assert.equal(r.slug, 'api');
+  assert.deepEqual(r.events, ['ready', 'error']);
+});
+
+test('/unwatch <slug> → watch-unset', () => {
+  const r = route({ update: update({ text: '/unwatch api' }), ...ctx() });
+  assert.equal(r.action, 'watch-unset');
+  assert.equal(r.slug, 'api');
+});
+
+test('/watching → watch-list, not a watch-set for a slug named "ing"', () => {
+  const r = route({ update: update({ text: '/watching' }), ...ctx() });
+  assert.equal(r.action, 'watch-list');
+});
+
+test('a session literally named "watch" is never delivered via the prefix path', () => {
+  // "/watch foo" parses as watch-set(slug=foo), never deliver to a slug "watch".
+  const r = route({ update: update({ text: '/watch foo' }), ...ctx({ knownSlugs: ['watch', 'foo'] }) });
+  assert.equal(r.action, 'watch-set');
+  assert.equal(r.slug, 'foo');
 });

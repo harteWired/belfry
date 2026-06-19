@@ -53,6 +53,30 @@ test('listSessions: returns active slugs with last-outbound metadata', () => {
   assert.equal(out[0].last_outbound_ts, 12345);
 });
 
+test('listSessions: unions registry-reachable spokes with observed dashboard slugs and flags reachability', () => {
+  const watcher = fakeWatcher(['belfry', 'stale-junk'], { belfry: { status: 'working' } });
+  // api is a live spoke with no dashboard file; stale-junk is a dashboard file
+  // with no live spoke. Both must surface, distinguished by `reachable`.
+  const reg = { deliver: () => 1, knownSlugs: () => new Set(['belfry', 'api']) };
+  const h = makeBrainHandlers(baseDeps({ watcher, registry: reg }));
+  const out = h.listSessions();
+  const bySlug = Object.fromEntries(out.map((r) => [r.slug, r]));
+  assert.deepEqual(out.map((r) => r.slug), ['api', 'belfry', 'stale-junk'], 'union, sorted, nothing hidden');
+  assert.equal(bySlug.api.reachable, true, 'registry-only slug is reachable');
+  assert.equal(bySlug.api.status, null, 'reachable-but-no-dashboard has null status');
+  assert.equal(bySlug['stale-junk'].reachable, false, 'dashboard-only slug is not reachable');
+  assert.equal(bySlug.belfry.reachable, true);
+  assert.equal(bySlug.belfry.status, 'working', 'status comes from the cache');
+});
+
+test('getSession: reachable spoke with no dashboard file reports registered-without-status', () => {
+  const reg = { deliver: () => 1, knownSlugs: () => new Set(['api']) };
+  const h = makeBrainHandlers(baseDeps({ watcher: fakeWatcher([], {}), registry: reg }));
+  const out = h.getSession({ slug: 'api' });
+  assert.equal(out.reachable, true);
+  assert.match(out.error, /no dashboard status/);
+});
+
 test('getSession: returns cached status JSON for active slug', () => {
   const status = { status: 'ready', last_response: 'hello' };
   const watcher = fakeWatcher(['belfry'], { belfry: status });

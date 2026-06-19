@@ -21,16 +21,29 @@
  * an already-present writer of the convention (e.g. claudelike-bar).
  */
 import {
-  writeFileSync, mkdirSync, renameSync,
+  writeFileSync, readFileSync, mkdirSync, renameSync,
   openSync, closeSync, readSync, fstatSync,
 } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { Buffer } from 'node:buffer';
-import { deriveSlug } from '../lib/slug.js';
+import { resolveSlug } from '../lib/slug.js';
 
-const STATUS_DIR = join(tmpdir(), 'claude-dashboard');
+// Resolve the status directory (Status-File Contract v1 §A). Precedence:
+//   1. CLAUDELIKE_STATUS_DIR (canonical env)
+//   2. CLAUDE_DASHBOARD_DIR  (deprecated transition alias)
+//   3. default: POSIX → the LITERAL /tmp/claude-dashboard, Windows →
+//      os.tmpdir()/claude-dashboard.
+// The fixed POSIX literal is invariant to per-process TMPDIR — Claude Code
+// sets TMPDIR=/tmp/claude-<uid>, so an os.tmpdir()-derived path would diverge
+// from the dir the daemon watches. Must stay in lock-step with lib/watcher.js.
+export function resolveStatusDir(env = process.env) {
+  return (env.CLAUDELIKE_STATUS_DIR || '').trim()
+    || (env.CLAUDE_DASHBOARD_DIR || '').trim()
+    || (process.platform === 'win32' ? join(tmpdir(), 'claude-dashboard') : '/tmp/claude-dashboard');
+}
+const STATUS_DIR = resolveStatusDir(process.env);
 // Tail buffer for transcript reads. Large enough to capture a typical final
 // exchange (last user prompt + last assistant response), small enough that
 // the synchronous read on the hook's hot path is bounded regardless of how
@@ -214,6 +227,14 @@ function tailTranscriptOnce(transcriptPath) {
   }
 }
 
+// belfry-owned status fields (Status-File Contract v1 §D). On every write we
+// clear these from any existing file and re-set them from the fresh payload —
+// "always write event-specific fields even when empty to clobber stale
+// values", so a pure-tool `ready` write doesn't inherit a stale last_response
+// from the prior turn. Fields NOT in this set (e.g. `context_percent` from the
+// claudelike-bar statusline) are foreign and preserved by the read-merge.
+const OWNED_KEYS = ['status', 'event', 'ts', 'last_prompt', 'last_response'];
+
 function writeAtomic(filePath, payload) {
   // 0700 dir + 0600 files: the JSON carries last_prompt/last_response
   // tailed from the transcript, which can include code being authored,
@@ -221,8 +242,19 @@ function writeAtomic(filePath, payload) {
   // 0755 and files at 0644 (world-readable), making cross-UID reads
   // trivial on a shared host. Tighten to owner-only.
   mkdirSync(STATUS_DIR, { recursive: true, mode: 0o700 });
+  // Read-merge-write (Contract v1 §D): preserve foreign fields written by
+  // other participants in the convention rather than clobbering the file.
+  let existing = {};
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf8'));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) existing = parsed;
+  } catch {
+    // ENOENT or malformed — start from an empty object.
+  }
+  for (const k of OWNED_KEYS) delete existing[k];
+  const merged = { ...existing, ...payload };
   const tmp = `${filePath}.tmp.${process.pid}`;
-  writeFileSync(tmp, JSON.stringify(payload), { mode: 0o600 });
+  writeFileSync(tmp, JSON.stringify(merged), { mode: 0o600 });
   renameSync(tmp, filePath);
 }
 
@@ -232,7 +264,14 @@ export async function runHook({ stdinText, env = process.env, cwdDefault = proce
     try { input = JSON.parse(stdinText); } catch { /* swallow */ }
   }
   const cwd = typeof input.cwd === 'string' && input.cwd.length > 0 ? input.cwd : cwdDefault;
-  const slug = deriveSlug({ cwd, env });
+  const { slug } = resolveSlug({ cwd, env });
+  if (!slug) {
+    // STRICT no-match (Contract v1 §B): an unregistered directory mints no
+    // status file — this is the fix for the junk-slug accumulation (#40).
+    // Register the project (write the path index) or set CLAUDELIKE_BAR_STRICT=0
+    // to opt back into the basename fallback.
+    return { slug: null, skipped: true };
+  }
   const event = typeof input.hook_event_name === 'string' ? input.hook_event_name : '';
   const status = statusFromEvent(event);
   const tail = typeof input.transcript_path === 'string' && input.transcript_path.length > 0

@@ -47,6 +47,20 @@ test('set: rejects when slug not in active dashboard', () => {
   assert.match(out.reason, /a, b/);
 });
 
+test('set: accepts a federated target without a local session, and resolves it (#44)', () => {
+  const r = new NicknameRegistry({ getActiveSlugs: () => new Set(['a', 'b']) });
+  const out = r.set('keeper', 'e/erebus-master');
+  assert.equal(out.ok, true, 'a host-qualified target skips the active-local-session check');
+  assert.equal(r.resolve('keeper'), 'e/erebus-master');
+});
+
+test('set: still rejects a bare slug that is not an active local session (#44 regression)', () => {
+  const r = new NicknameRegistry({ getActiveSlugs: () => new Set(['a', 'b']) });
+  const out = r.set('foo', 'nonexistent');
+  assert.equal(out.ok, false);
+  assert.match(out.reason, /no active session/i);
+});
+
 test('set: rejects when nickname collides with an active slug', () => {
   const r = new NicknameRegistry({ getActiveSlugs: () => new Set(['ob', 'foo']) });
   const out = r.set('foo', 'ob');

@@ -19,6 +19,7 @@ import { SendQueue, DEFAULT_SEND_INTERVAL_MS } from '../lib/send-queue.js';
 import { ReplyTracker } from '../lib/reply-tracker.js';
 import { Registry } from '../lib/registry.js';
 import { Poller } from '../lib/poller.js';
+import { makeDeliveryTarget } from '../lib/delivery-target.js';
 import { maybeAutoReply } from '../lib/auto-reply.js';
 import { makeBrainSummarizers } from '../lib/brain-summarize.js';
 import { makeStatusHandler } from '../lib/status-handler.js';
@@ -43,6 +44,14 @@ import { PingDedup } from '../lib/ping-dedup.js';
 import { resolveReactionConfig } from '../lib/reactions.js';
 import { BroadcastTracker, DEFAULT_BROADCAST_TIMEOUT_MS } from '../lib/broadcast-tracker.js';
 import { buildBroadcastSummary } from '../lib/broadcast-summary.js';
+import { AgentRelayGuard } from '../lib/agent-relay-guard.js';
+import { parseFederationConfig } from '../lib/federation-config.js';
+import { wireFederation, DEFAULT_FED_PORT } from '../lib/federation-daemon.js';
+import { TelegramOwner } from '../lib/federation-owner.js';
+import { parseBridges } from '../lib/bridge.js';
+import { SubscriptionsStore } from '../lib/subscriptions-store.js';
+import { makeWatchHandler } from '../lib/watch-handler.js';
+import { answerCallbackQuery as rawAnswerCallbackQuery } from '../lib/telegram.js';
 
 function log(msg) {
   process.stderr.write(`${new Date().toISOString()} ${msg}\n`);
@@ -74,18 +83,40 @@ async function main() {
     log(`config: ${slugs.length} subscribed slug(s): ${slugs.join(', ') || '(none)'}`);
   }
 
+  // Live, persisted watch overrides (#40 — /watch from Telegram). Layers a
+  // machine-managed overrides file over the hand-edited belfry.jsonc and mutates
+  // config.subscriptions IN PLACE, so /watch toggles apply immediately (no
+  // restart) and the daemon's shouldFire reads the live state.
+  const subscriptionsStore = new SubscriptionsStore({ subscriptions: config.subscriptions, log });
+
   const botToken = (process.env.BELFRY_TOKEN ?? '').trim();
   const chatId = (process.env.BELFRY_CHAT_ID ?? '').trim();
   const forumTopicId = (process.env.BELFRY_FORUM_TOPIC_ID ?? '').trim();
   const mcpPort = Number(process.env.BELFRY_MCP_PORT || 49876);
   const transcribeKey = (process.env.BELFRY_TRANSCRIBE_KEY ?? '').trim();
   const transcribeProvider = (process.env.BELFRY_TRANSCRIBE_PROVIDER ?? '').trim() || undefined;
+  // Federation-only mode (#29): this node participates ONLY in the cross-host
+  // a2a mesh — it runs the loopback registry + the /fed listener but NEVER polls
+  // Telegram. A peer host (e.g. Erebus) that has no Telegram role must not start
+  // the poller: Telegram allows one getUpdates owner per bot, and the floating
+  // election would otherwise hand inbound replies to a daemon with no sessions
+  // to route them to. So in this mode we skip the poller, the outbound dashboard
+  // watcher, and the brain — the whole Telegram side — and serve the mesh only.
+  const fedOnly = /^(1|true|yes|on)$/i.test((process.env.BELFRY_FED_ONLY ?? '').trim());
   if (!botToken || !chatId) {
-    log('missing BELFRY_TOKEN and/or BELFRY_CHAT_ID env vars — relay disabled');
-    log('see README.md for setup. Common pattern: a launcher script reads from your secret store and exec-s belfry with the env vars set.');
-    process.exit(1);
+    // A federation-only node has no Telegram role, so it doesn't need the bot
+    // token to run — it's a pure multi-agent mesh node (registry + /fed). Only
+    // a Telegram-serving daemon requires the credentials.
+    if (!fedOnly) {
+      log('missing BELFRY_TOKEN and/or BELFRY_CHAT_ID env vars — relay disabled');
+      log('see README.md for setup. Common pattern: a launcher script reads from your secret store and exec-s belfry with the env vars set.');
+      process.exit(1);
+    }
+    log('BELFRY_FED_ONLY with no BELFRY_TOKEN/CHAT_ID — running as a pure mesh node (registry + federation only, no Telegram)');
+  } else {
+    log(`telegram bot configured (chat ${chatId}${forumTopicId ? `, topic ${forumTopicId}` : ''})`);
   }
-  log(`telegram bot configured (chat ${chatId}${forumTopicId ? `, topic ${forumTopicId}` : ''})`);
+  if (fedOnly) log('BELFRY_FED_ONLY set — federation-only node: Telegram poller, watcher and brain disabled (mesh only)');
 
   // Single serial pacer for every outbound Telegram write (#35). belfry sends
   // to one chat, whose per-chat rate limit a `/all` fan-out (N replies + N
@@ -323,7 +354,10 @@ async function main() {
     log(`full-expand: sent ${chunks.length} chunk(s) for msg ${targetMessageId} (${entry.text.length} chars total)`);
   };
 
-  const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound });
+  // Agent-to-agent relay flood/loop guard (#36): bounds runaway session↔session
+  // ping-pong from the daemon side, independent of the models.
+  const relayGuard = new AgentRelayGuard();
+  const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound, relayGuard });
   await registry.start();
 
   // Broadcast orchestrator (#30). Shared by the Telegram `/all` path (poller)
@@ -376,6 +410,77 @@ async function main() {
   };
   registry.setBroadcastHandler(onBroadcast);
 
+  // Federation (#29): the cross-machine agent mesh. OFF unless a host letter is
+  // configured (env BELFRY_HOST_LETTER or the belfry.jsonc `federation` block),
+  // so every single-host deployment is byte-for-byte unchanged. When on, we
+  // start a fail-closed /fed/* listener on the tailnet interface, attach the
+  // remote-`send_to` router to the registry, gossip our local slug set to peers,
+  // and run the floating Telegram-owner election in the poller (a 409 standby
+  // instead of one daemon hogging the bot). A bad config or a failed listener
+  // start is logged and swallowed — the daemon keeps serving locally.
+  let federation = null;
+  let telegramOwner = null;
+  let fedConfig = { enabled: false };
+  // The local identity the bot wears on the mesh for human→federated-session DMs
+  // (#44). A peer reply addressed to this slug is posted to the chat rather than
+  // injected into a (nonexistent) local session. Configurable; default "telegram".
+  const fedBridgeSlug = (config.federation && typeof config.federation.telegramBridgeSlug === 'string'
+    && config.federation.telegramBridgeSlug.trim()) || 'telegram';
+  try {
+    fedConfig = parseFederationConfig({ env: process.env, file: config.federation });
+  } catch (err) {
+    log(`federation: invalid config (${err.message}) — federation disabled`);
+  }
+  if (fedConfig.enabled && !fedConfig.token) {
+    log('federation: host letter set but BELFRY_FED_TOKEN missing — refusing an unauthenticated mesh listener; federation disabled');
+  } else if (fedConfig.enabled) {
+    const fedBind = (process.env.BELFRY_FED_BIND ?? '').trim() || '127.0.0.1';
+    const fedPortEnv = Number(process.env.BELFRY_FED_PORT);
+    const fedPort = fedPortEnv > 0 ? fedPortEnv : DEFAULT_FED_PORT;
+    // Webhook bridges (#29 Phase C): map a slug to a headless agent's HTTP
+    // endpoint so the mesh can deliver to it (and route its replies back).
+    let bridges = new Map();
+    try {
+      bridges = parseBridges({ env: process.env, file: config.bridges });
+      if (bridges.size) log(`federation: ${bridges.size} webhook bridge(s): ${[...bridges.keys()].join(', ')}`);
+    } catch (err) {
+      log(`federation: invalid bridge config (${err.message}) — bridges disabled`);
+    }
+    try {
+      // The owner state machine is created BEFORE wireFederation so the gossip
+      // loop can advertise its `reachableAt` and the priority gate can read it
+      // (#38). The same instance is handed to the Poller below.
+      telegramOwner = new TelegramOwner();
+      federation = await wireFederation({
+        registry,
+        fedConfig,
+        relayGuard,
+        bridges,
+        // Return leg of a human→federated-session DM (#44): a peer reply to the
+        // bridge slug is posted to the chat via the normal outbound path, which
+        // records the reply-tracker mapping so a quote-reply continues the thread.
+        telegramBridge: {
+          slug: fedBridgeSlug,
+          deliver: async (fromQualified, text) => {
+            await sendOutbound({ slug: fromQualified, text, replyToMessageId: null });
+            return { delivered: 1 };
+          },
+        },
+        owner: telegramOwner,
+        bind: fedBind,
+        port: fedPort,
+        log,
+      });
+      federation.startGossip();
+      const prio = fedConfig.priority == null ? 'unprioritized' : `priority ${fedConfig.priority}`;
+      log(`federation: enabled as host "${fedConfig.hostName}" (${fedConfig.hostLetter}); telegram-owner election active (${prio})`);
+    } catch (err) {
+      log(`federation: failed to start (${err.message}) — continuing without the mesh`);
+      federation = null;
+      telegramOwner = null;
+    }
+  }
+
   // Watcher is created later (after we know the digest flush + onUpdate
   // callbacks), but the nickname registry and agent handler both need to
   // call into it. Single forward-declared holder both close over.
@@ -388,6 +493,29 @@ async function main() {
   nicknames.load();
   if (config.nicknames) nicknames.bootstrap(config.nicknames);
   log(`nicknames loaded: ${Object.keys(nicknames.list()).length} entr${Object.keys(nicknames.list()).length === 1 ? 'y' : 'ies'}`);
+
+  // /watch control panel (#40): manage proactive-ping subscriptions from
+  // Telegram — a tap-toggle keyboard + /watch /unwatch /watching commands,
+  // applied live via subscriptionsStore. Menu lists every known slug (dashboard
+  // ∪ registry) plus anything currently watched. answerCallbackQuery is called
+  // direct (not paced) so the button's spinner dismisses promptly; the in-place
+  // keyboard re-render goes through the paced editMessageText.
+  const watchHandler = makeWatchHandler({
+    store: subscriptionsStore,
+    getSlugs: () => {
+      const s = new Set();
+      if (watcher) for (const x of watcher.getActiveSlugs()) s.add(x);
+      for (const x of registry.knownSlugs()) s.add(x);
+      return s;
+    },
+    send: ({ text, replyToMessageId, replyMarkup }) =>
+      sendMessage({ botToken, chatId, text, forumTopicId, replyToMessageId, replyMarkup }),
+    editMessage: ({ messageId, text, replyMarkup }) =>
+      editMessageText({ botToken, chatId, messageId, text, replyMarkup }),
+    answerCallback: ({ callbackQueryId, text }) =>
+      rawAnswerCallbackQuery({ botToken, callbackQueryId, text }),
+    log,
+  });
 
   // Brain-backed summarizers. Constructed here so statusHandler can reference
   // them; they close over the `brain` variable (which is constructed below)
@@ -487,8 +615,10 @@ async function main() {
     systemPrompt: BRAIN_SYSTEM_PROMPT,
     log,
   });
-  brain.start();
-  log(`brain: spawned (cwd ${brainDir})`);
+  if (!fedOnly) {
+    brain.start();
+    log(`brain: spawned (cwd ${brainDir})`);
+  }
 
   // Bind the brain-backed summarizers now that brain exists. The
   // closure-captured object reference threaded into statusHandler /
@@ -578,18 +708,31 @@ async function main() {
     log('voice transcription disabled (BELFRY_TRANSCRIBE_KEY not set) — voice notes will be acknowledged but dropped');
   }
 
+  // Federation-aware delivery target (#44): a routed slug carrying a host prefix
+  // (`<letter>/<slug>`) is a session on a peer host — forward it over the mesh
+  // from the Telegram bridge identity so the reply routes back to this chat.
+  // Bare slugs deliver locally exactly as before. The wrapper proxies the full
+  // Poller `target` interface (deliver + hasSlug + knownSlugs); see
+  // lib/delivery-target.js.
+  const deliveryTarget = makeDeliveryTarget({ registry, federation, fedBridgeSlug, log });
+
   const poller = new Poller({
     botToken,
     expectedChatId: Number(chatId),
     replyTracker,
-    target: registry,
+    target: deliveryTarget,
     reactEmoji,
     react: setMessageReaction, // paced wrapper (#35) — inbound ack shares the send queue
+    owner: telegramOwner, // floating Telegram-owner election (#29); null when federation is off
+    isPreempted: federation?.isPreempted ?? null, // priority gate (#38); null when federation/priority off
+
     onStatusRequest: statusHandler,
     onNickRequest: nickHandler,
     onHelpRequest: helpHandler,
     onApproval: approvalHandler,
     onResumeRequest: resumeHandler,
+    onWatchRequest: watchHandler.onRequest,
+    onWatchToggle: watchHandler.onToggle,
     onUnmatched: agentHandler,
     onFullExpand: fullExpandHandler,
     onBroadcast,
@@ -601,8 +744,10 @@ async function main() {
     sendVoiceReply,
     log,
   });
-  poller.start();
-  log(`poller started (chat ${chatId})`);
+  if (!fedOnly) {
+    poller.start();
+    log(`poller started (chat ${chatId})`);
+  }
 
   // Outbound: chokidar watcher → throttle → composer → Telegram.
   const throttle = new Throttle({
@@ -725,8 +870,8 @@ async function main() {
     },
     log,
   });
-  watcher.start();
-  log('belfry up');
+  if (!fedOnly) watcher.start();
+  log(fedOnly ? 'belfry up (federation-only)' : 'belfry up');
 
   const shutdown = async (signal) => {
     log(`received ${signal} — shutting down`);
@@ -734,6 +879,7 @@ async function main() {
     await digest.flushAll();
     await poller.stop();
     await brain.stop();
+    if (federation) await federation.stop();
     await registry.stop();
     await watcher.stop();
     replyTracker.flush(); // sync flush of any debounced setImmediate save

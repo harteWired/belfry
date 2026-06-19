@@ -946,3 +946,48 @@ test('broadcast: no handler wired → logs and drops', async () => {
   assert.equal(target.delivered.length, 0);
   assert.ok(logs.some((m) => /broadcast dropped/.test(m)));
 });
+
+// --- priority gate (#38) ---
+
+test('tick: when preempted, does NOT call getUpdates and stands by', async () => {
+  let fetchCalls = 0;
+  const fetchFn = async () => { fetchCalls++; return { ok: true, json: async () => ({ ok: true, result: [] }) }; };
+  const owner = { preempts: 0, preempt() { this.preempts++; return { changed: this.preempts === 1, waitMs: 0 }; } };
+  const logs = [];
+  const poller = new Poller({
+    botToken: 'TOKEN', expectedChatId: CHAT, replyTracker: new ReplyTracker(),
+    target: fakeTarget(), fetchFn, owner, isPreempted: () => true, log: (m) => logs.push(m),
+  });
+  await poller.tick();
+  assert.equal(fetchCalls, 0, 'getUpdates must not be called while preempted');
+  assert.equal(owner.preempts, 1, 'stood down via owner.preempt()');
+  assert.ok(logs.some((m) => /higher-priority host owns the bot/.test(m)));
+});
+
+test('tick: when NOT preempted, polls normally', async () => {
+  let fetchCalls = 0;
+  const fetchFn = async () => { fetchCalls++; return { ok: true, json: async () => ({ ok: true, result: [] }) }; };
+  const owner = {
+    preempts: 0,
+    preempt() { this.preempts++; return { changed: false, waitMs: 0 }; },
+    record() { return { changed: false }; }, // the poll-success path records 'ok'
+  };
+  const poller = new Poller({
+    botToken: 'TOKEN', expectedChatId: CHAT, replyTracker: new ReplyTracker(),
+    target: fakeTarget(), fetchFn, owner, isPreempted: () => false,
+  });
+  await poller.tick();
+  assert.equal(fetchCalls, 1, 'getUpdates called when not preempted');
+  assert.equal(owner.preempts, 0, 'did not stand down');
+});
+
+test('tick: no gate wired → polls as before (inert)', async () => {
+  let fetchCalls = 0;
+  const fetchFn = async () => { fetchCalls++; return { ok: true, json: async () => ({ ok: true, result: [] }) }; };
+  const poller = new Poller({
+    botToken: 'TOKEN', expectedChatId: CHAT, replyTracker: new ReplyTracker(),
+    target: fakeTarget(), fetchFn, // no isPreempted
+  });
+  await poller.tick();
+  assert.equal(fetchCalls, 1);
+});

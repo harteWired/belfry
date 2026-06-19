@@ -154,15 +154,16 @@ test('broadcast injection emits meta.broadcast as the STRING "true", and all met
   await p.stop();
 });
 
-test('plugin tools/list advertises the reply tool', async () => {
+test('plugin tools/list advertises the reply and send_to tools', async () => {
   const p = startPlugin();
   p.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } });
   await p.waitFor((m) => m.id === 1);
   p.send({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const resp = await p.waitFor((m) => m.id === 2);
-  assert.equal(resp.result.tools.length, 1);
-  assert.equal(resp.result.tools[0].name, 'reply');
-  assert.deepEqual(resp.result.tools[0].inputSchema.required, ['text']);
+  const byName = Object.fromEntries(resp.result.tools.map((t) => [t.name, t]));
+  assert.deepEqual(Object.keys(byName).sort(), ['reply', 'send_to']);
+  assert.deepEqual(byName.reply.inputSchema.required, ['text']);
+  assert.deepEqual(byName.send_to.inputSchema.required, ['slug', 'text']);
   await p.stop();
 });
 
@@ -252,6 +253,68 @@ test('reply tool POSTs to daemon /send and reports the message_id', async () => 
   assert.equal(calls.length, 2);
   assert.equal(calls[1].text.length, 5000);
   assert.equal(calls[1].text, huge);
+
+  child.stdin.end();
+  await new Promise((resolve) => {
+    if (child.exitCode !== null) return resolve();
+    child.on('exit', resolve);
+    setTimeout(() => child.kill('SIGTERM'), 1000).unref();
+  });
+  await reg.stop();
+});
+
+test('send_to tool relays to another session via daemon /send-to (#36)', async () => {
+  const reg = new (await import('../lib/registry.js')).Registry({ port: 0, recvTimeoutMs: 200 });
+  await reg.start();
+  // Destination session registered directly on the registry.
+  await fetch(`http://127.0.0.1:${reg.port}/register`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instance_id: 'dst-inst', slug: 'a2a-dst', cwd: '/x' }),
+  });
+  const child = spawn('node', [PLUGIN_PATH], {
+    cwd: '/tmp',
+    env: { ...process.env, BELFRY_MCP_BASE: `http://127.0.0.1:${reg.port}`, CLAUDELIKE_BAR_NAME: 'a2a-src' },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const messages = [];
+  let buf = '';
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    buf += chunk;
+    while (true) {
+      const nl = buf.indexOf('\n');
+      if (nl < 0) break;
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (line) { try { messages.push(JSON.parse(line)); } catch { /* ignore */ } }
+    }
+  });
+  const send = (msg) => child.stdin.write(JSON.stringify(msg) + '\n');
+  const waitFor = async (pred, timeoutMs = 3000) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const found = messages.find(pred);
+      if (found) return found;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    throw new Error(`waitFor timed out: ${JSON.stringify(messages)}`);
+  };
+
+  send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } });
+  await waitFor((m) => m.id === 1);
+  send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  const start = Date.now();
+  while (Date.now() - start < 2000) {
+    if (reg.bySlug.has('a2a-src')) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+
+  send({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'send_to', arguments: { slug: 'a2a-dst', text: 'hey peer' } } });
+  const resp = await waitFor((m) => m.id === 2);
+  assert.match(resp.result.content[0].text, /Relayed to "a2a-dst"/);
+  // Destination receives it tagged as an agent message from the sender's slug.
+  const r = await fetch(`http://127.0.0.1:${reg.port}/recv?instance_id=dst-inst`);
+  assert.deepEqual(await r.json(), { text: 'hey peer', origin: 'agent', from: 'a2a-src' });
 
   child.stdin.end();
   await new Promise((resolve) => {

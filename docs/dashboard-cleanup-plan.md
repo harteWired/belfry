@@ -73,3 +73,13 @@ empty to clobber stale values.
 ## Rollout order
 E (land the spec) → A+B (root fix, all hooks) → F (de-dup) → C+D (hygiene) → G (sweep).
 vscode-enhancement drafts the ancestor-walk for review first.
+
+## Belfry implementation status (branch `feat/status-file-contract-v1`)
+Belfry's half of the gate is **BUILT + tested** (not yet merged/deployed; the LIVE sweep + dir-converge wait for Matt's GO and a "gate green" ping to claudelike-bar):
+- **A ancestor-walk** — `lib/slug.js` `lookupIndex` now walks `cwd` → each parent → root, first registered ancestor wins (was exact-key only).
+- **B STRICT skip** — `lib/slug.js` `resolveSlug` returns `slug:null` on no-match (default-on; `CLAUDELIKE_BAR_STRICT=0` → legacy basename). `bin/belfry-hook.js` `runHook` skips the write when slug is null. Legacy `deriveSlug` wrapper (STRICT-off) preserved for `belfry-mcp`.
+- **A-dir (§A) `CLAUDELIKE_STATUS_DIR` precedence** — `resolveStatusDir` in `bin/belfry-hook.js` + lock-step update in `lib/watcher.js`: `CLAUDELIKE_STATUS_DIR` → `CLAUDE_DASHBOARD_DIR` (alias) → POSIX literal.
+- **D read-merge-write** — `writeAtomic` reads existing JSON, clears only belfry-owned keys (`status`/`event`/`ts`/`last_prompt`/`last_response`), preserves foreign fields (`context_percent` etc.), then atomic tmp+rename.
+- **C sanitize** — already byte-identical (unchanged).
+- Tests: `test/slug.test.js` (ancestor-walk, nearest-ancestor, STRICT skip, LEGACY escape tokens, deriveSlug back-compat) + `test/belfry-hook.test.js` (STRICT skip, `resolveStatusDir` precedence, read-merge preserve/clear) — green.
+- Belfry's G items: the `belfry-hook-bad-*/test-*` probe files are STALE leftovers (the current test suite already isolates to a temp dir via `CLAUDE_DASHBOARD_DIR`), so they're one-time deletes that do **not** recur. `debug.log` rotation stays belfry's.

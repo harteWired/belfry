@@ -1,6 +1,15 @@
 # Dashboard junk cleanup — plan + Status-File Contract v1
 
-> **Status:** APPROVED (Matt, 2026-06-09) — implementation delegated to the projects to
+> **Status:** ✅ CLOSED (2026-06-19) — cutover fully executed and verified across both
+> writers. belfry's gate is live; claudelike-bar's hook flip (extension 0.20.1 cutover
+> bundle) is live; the joint 3-point verify (STRICT skips unregistered dirs · foreign
+> `context_percent` survives a write · ready-flip pings fire end-to-end) passed GREEN on
+> both sides; and CLB swept the junk (47 deleted — 46 stale slug files + the 12.3MB
+> `debug.log`) on Matt's direct GO, leaving the 27 registered slugs + `.debug`. belfry
+> deleted its own 4 `belfry-hook-bad/test-*` probe files. Dir confirmed clean. This file
+> is retained as the durable record of the plan + frozen contract.
+>
+> **Status (historical):** APPROVED (Matt, 2026-06-09) — implementation delegated to the projects to
 > coordinate ("gossip") via the agent mesh. This file is belfry's durable record so the
 > plan + contract are restorable. The de-dup was sorted peer-to-peer: the **canonical hook
 > home is `claudelike-bar/hooks/`** (the published extension; its VSIX bundles
@@ -74,8 +83,8 @@ empty to clobber stale values.
 E (land the spec) → A+B (root fix, all hooks) → F (de-dup) → C+D (hygiene) → G (sweep).
 vscode-enhancement drafts the ancestor-walk for review first.
 
-## Belfry implementation status (branch `feat/status-file-contract-v1`)
-Belfry's half of the gate is **BUILT + tested** (not yet merged/deployed; the LIVE sweep + dir-converge wait for Matt's GO and a "gate green" ping to claudelike-bar):
+## Belfry implementation status — ✅ LANDED + LIVE (PR #46, merged `cd3fd7a`)
+Belfry's half of the gate is **BUILT + tested + merged + deployed-live on Jinn** (PR #46 merged `feat/status-file-contract-v1` @ `4bb5e6e` into `feat/telegram-federated-dm`; Jinn runs from the working tree so the per-subprocess hook gate went live immediately). The live sweep + joint verify completed 2026-06-19 (see the CLOSED banner up top). Note: on Jinn, claudelike-bar's extension hook is the active status-file writer in the VS Code sessions — belfry-hook's gate below is the conforming second implementation of the same contract:
 - **A ancestor-walk** — `lib/slug.js` `lookupIndex` now walks `cwd` → each parent → root, first registered ancestor wins (was exact-key only).
 - **B STRICT skip** — `lib/slug.js` `resolveSlug` returns `slug:null` on no-match (default-on; `CLAUDELIKE_BAR_STRICT=0` → legacy basename). `bin/belfry-hook.js` `runHook` skips the write when slug is null. Legacy `deriveSlug` wrapper (STRICT-off) preserved for `belfry-mcp`.
 - **A-dir (§A) `CLAUDELIKE_STATUS_DIR` precedence** — `resolveStatusDir` in `bin/belfry-hook.js` + lock-step update in `lib/watcher.js`: `CLAUDELIKE_STATUS_DIR` → `CLAUDE_DASHBOARD_DIR` (alias) → POSIX literal.

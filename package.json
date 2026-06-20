@@ -27,5 +27,5 @@
     "type": "git",
     "url": "git+https://github.com/harteWired/belfry.git"
   },
-  "license": "UNLICENSED"
+  "license": "MIT"
 }

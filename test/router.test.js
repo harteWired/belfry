@@ -573,3 +573,72 @@ test('a session literally named "watch" is never delivered via the prefix path',
   assert.equal(r.action, 'watch-set');
   assert.equal(r.slug, 'foo');
 });
+
+// ── Federation-aware prefix routing (#44): route a remote session by its real
+//    name via the gossip ownership map, not only its nickname. ──────────────
+
+// A resolver that maps bare slugs to '<letter>/<slug>' for a fake 1-host fleet.
+function fedResolver(map = { 'erebus-master': 'e/erebus-master' }) {
+  return (token) => map[token?.toLowerCase()] ?? null;
+}
+
+test('bare remote slug resolves to <letter>/<slug> via the gossip map (#44)', () => {
+  const r = route({
+    update: update({ text: '/erebus-master ping' }),
+    ...ctx(),
+    resolveFederated: fedResolver(),
+  });
+  assert.deepEqual(r, { action: 'deliver', slug: 'e/erebus-master', text: 'ping', messageId: 99 });
+});
+
+test('explicit /<letter>/<slug> typed directly routes as-is', () => {
+  const r = route({
+    update: update({ text: '/e/erebus-master hello there' }),
+    ...ctx(),
+    resolveFederated: fedResolver(),
+  });
+  assert.deepEqual(r, { action: 'deliver', slug: 'e/erebus-master', text: 'hello there', messageId: 99 });
+});
+
+test('a local slug wins over a same-named remote one (hasSlug checked first)', () => {
+  // Both a local "belfry" and a (hypothetical) remote "belfry" exist; local wins.
+  const r = route({
+    update: update({ text: '/belfry do X' }),
+    ...ctx(),
+    resolveFederated: fedResolver({ belfry: 'e/belfry' }),
+  });
+  assert.deepEqual(r, { action: 'deliver', slug: 'belfry', text: 'do X', messageId: 99 });
+});
+
+test('a nickname wins over a federation resolve (nick checked before gossip)', () => {
+  const r = route({
+    update: update({ text: '/keeper status?' }),
+    ...ctx({ nicknames: { keeper: 'e/erebus-master' } }),
+    resolveFederated: fedResolver({ keeper: 's/keeper' }), // would resolve differently
+  });
+  assert.deepEqual(r, { action: 'deliver', slug: 'e/erebus-master', text: 'status?', messageId: 99 });
+});
+
+test('unknown/ambiguous remote slug (resolver returns null) → unmatched', () => {
+  const r = route({
+    update: update({ text: '/ghost-session hi' }),
+    ...ctx(),
+    resolveFederated: fedResolver(), // only knows erebus-master
+  });
+  assert.equal(r.action, 'unmatched');
+});
+
+test('federation off (default resolver) leaves bare remote slug unmatched', () => {
+  // No resolveFederated passed → defaults to () => null; behavior unchanged.
+  const r = route({ update: update({ text: '/erebus-master hi' }), ...ctx() });
+  assert.equal(r.action, 'unmatched');
+});
+
+test('a bare remote slug with no body falls through (no empty deliver)', () => {
+  const r = route({
+    update: update({ text: '/erebus-master' }),
+    ...ctx(),
+    resolveFederated: fedResolver(),
+  });
+  assert.equal(r.action, 'unmatched');
+});

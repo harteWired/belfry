@@ -737,6 +737,15 @@ async function main() {
     onFullExpand: fullExpandHandler,
     onBroadcast,
     resolveNickname: (token) => nicknames.resolve(token),
+    // Resolve a bare remote slug against the gossip ownership map so a peer
+    // session routes by its real name, not only its nickname (#44). Null when
+    // federation is off, the slug is local (hasSlug owns it), unknown, or
+    // ambiguous across hosts — qualify with `<letter>/<slug>` in those cases.
+    resolveFederated: (token) => {
+      if (!federation) return null;
+      const r = federation.resolveAddress(token);
+      return r.kind === 'resolved' && !r.local ? `${r.hostLetter}/${r.slug}` : null;
+    },
     resolveTopic: (id) => topicMap.get(id) ?? null,
     hasFullStash: (msgId) => oversizeCache.has(msgId),
     attachmentDir,

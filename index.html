@@ -3,30 +3,31 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>belfry — one bot, many sessions</title>
-  <meta name="description" content="Telegram-to-terminal MUX rigging for remote-driving multiple Claude Code projects. One bot, one chat, N parallel sessions — outbound status fans into one feed, replies route back into the matching session.">
+  <title>belfry — one bot, every machine</title>
+  <meta name="description" content="belfry bridges every Claude Code session across every machine to one Telegram bot — a self-healing multi-host fleet. When the host owning the bot dies, a standby takes over in ~30–90s and hands back on recovery.">
 
-  <link rel="canonical" href="https://hartewired.github.io/belfry/">
+  <link rel="canonical" href="https://lab.mattharte.com/belfry/">
   <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://hartewired.github.io/belfry/">
-  <meta property="og:title" content="belfry — one bot, many sessions">
-  <meta property="og:description" content="Telegram-to-terminal MUX rigging for remote-driving multiple Claude Code projects.">
+  <meta property="og:url" content="https://lab.mattharte.com/belfry/">
+  <meta property="og:title" content="belfry — one bot, every machine">
+  <meta property="og:description" content="Multi-machine Claude Code over Telegram. One bot shared across a self-healing fleet — failover in ~30–90s, automatic handback.">
   <meta property="og:site_name" content="harteWired Lab">
 
   <meta name="twitter:card" content="summary">
-  <meta name="twitter:title" content="belfry — one bot, many sessions">
-  <meta name="twitter:description" content="Telegram-to-terminal MUX rigging for remote-driving multiple Claude Code projects.">
+  <meta name="twitter:title" content="belfry — one bot, every machine">
+  <meta name="twitter:description" content="Multi-machine Claude Code over Telegram. One bot shared across a self-healing fleet — failover in ~30–90s, automatic handback.">
 
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
     "@type": "SoftwareSourceCode",
     "name": "belfry",
-    "description": "Telegram-to-terminal MUX rigging for remote-driving multiple Claude Code projects.",
-    "url": "https://hartewired.github.io/belfry/",
+    "description": "Multi-machine Claude Code over Telegram. One bot shared across a self-healing fleet of hosts — priority failover and automatic handback.",
+    "url": "https://lab.mattharte.com/belfry/",
     "codeRepository": "https://github.com/harteWired/belfry",
+    "license": "https://opensource.org/licenses/MIT",
     "programmingLanguage": "JavaScript",
     "runtimePlatform": "Node.js",
     "author": {
@@ -221,6 +222,17 @@
 
     /* ---- page-specific CSS below this line ---- */
 
+    /* belfry inherits the lab tile's blue (--color-sky). Override only the accent;
+       the ink/onyx/cream base + shell stay identical to lab.mattharte.com, so the
+       hero rhymes with the blue belfry tile a visitor clicked through. */
+    :root {
+      --color-sky-deep: oklch(0.50 0.13 250);
+      --color-accent-primary: var(--color-sky);
+      --color-accent-secondary: var(--color-sky-deep);
+      --color-accent-glow: oklch(0.61 0.12 245 / 0.16);
+    }
+    .nav__rabbit { filter: drop-shadow(0 0 8px oklch(0.61 0.12 245 / 0.4)); }
+
     /* HERO */
     .hero { position: relative; min-height: 100svh; display: flex; align-items: center; padding: calc(var(--space-3xl) + var(--space-xl)) var(--grid-margin) var(--space-3xl); overflow: hidden; }
     .hero__container { max-width: var(--grid-max-width); margin-inline: auto; width: 100%; display: grid; grid-template-columns: 1.1fr 0.9fr; gap: var(--space-2xl); align-items: center; }
@@ -238,12 +250,12 @@
 
     .hero__visual { position: relative; aspect-ratio: 1; max-width: 480px; justify-self: center; width: 100%; }
     .hero__rings { position: absolute; inset: 0; width: 100%; height: 100%; }
-    .hero__rabbit { position: absolute; inset: 0; margin: auto; width: 70%; height: 70%; object-fit: contain; filter: drop-shadow(0 0 60px oklch(0.78 0.14 55 / 0.18)); opacity: 0.92; }
+    .hero__rabbit { position: absolute; inset: 0; margin: auto; width: 70%; height: 70%; object-fit: contain; filter: drop-shadow(0 0 60px oklch(0.61 0.12 245 / 0.20)); opacity: 0.92; }
     /* Bell: drop backdrop-filter (Firefox flicker source). Solid bg reads identically against the PNG ambient. */
-    .hero__bell { position: absolute; right: 6%; top: 4%; width: 24%; aspect-ratio: 1; border-radius: 50%; border: 1px solid oklch(0.78 0.14 55 / 0.4); display: grid; place-items: center; background: oklch(0.17 0.012 270 / 0.85); font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-accent-primary); animation: bell-pulse 3.2s ease-in-out infinite; }
+    .hero__bell { position: absolute; right: 6%; top: 4%; width: 24%; aspect-ratio: 1; border-radius: 50%; border: 1px solid oklch(0.61 0.12 245 / 0.4); display: grid; place-items: center; background: oklch(0.17 0.012 270 / 0.85); font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-accent-primary); animation: bell-pulse 3.2s ease-in-out infinite; }
     @keyframes bell-pulse {
-      0%, 100% { box-shadow: 0 0 0 0 oklch(0.78 0.14 55 / 0.35); }
-      50%      { box-shadow: 0 0 0 14px oklch(0.78 0.14 55 / 0); }
+      0%, 100% { box-shadow: 0 0 0 0 oklch(0.61 0.12 245 / 0.35); }
+      50%      { box-shadow: 0 0 0 14px oklch(0.61 0.12 245 / 0); }
     }
 
     @media (max-width: 900px) {
@@ -256,8 +268,8 @@
     .pair { display: grid; grid-template-columns: repeat(2, 1fr); gap: var(--space-xl); }
     .pair__card { background: var(--color-bg-surface); border: var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-xl); position: relative; }
     .pair__card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px; background: var(--accent, var(--color-accent-primary)); border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
-    .pair__card--in { --accent: var(--color-sage); }
-    .pair__card--out { --accent: var(--color-ember); }
+    .pair__card--out { --accent: var(--color-sky); }
+    .pair__card--in { --accent: var(--color-sky-deep); }
     .pair__tag { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--accent); text-transform: uppercase; letter-spacing: var(--letter-spacing-overline); margin-bottom: var(--space-sm); }
     .pair__title { font-family: var(--font-heading); font-size: var(--text-2); font-weight: var(--font-weight-heading); line-height: var(--line-height-heading); color: var(--color-fg-base); margin-bottom: var(--space-md); }
     .pair__body { color: var(--color-fg-muted); font-size: var(--text-base); line-height: var(--line-height-body); }
@@ -265,18 +277,84 @@
     .pair__body code { font-family: var(--font-mono); font-size: 0.9em; color: var(--color-fg-base); background: var(--color-bg-elevated); padding: 0.1em 0.4em; border-radius: var(--radius-sm); }
     @media (max-width: 720px) { .pair { grid-template-columns: 1fr; } }
 
+    /* THE FLEET — cross-host mesh diagram */
+    .fleet { margin: 0; }
+    .fleet__figure { background: var(--color-bg-base); border: var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-xl) var(--space-lg) var(--space-lg); }
+    .fleet__svg { width: 100%; height: auto; display: block; }
+    .fleet__svg--tall { display: none; max-width: 400px; margin-inline: auto; }
+    @media (max-width: 560px) { .fleet__svg--wide { display: none; } .fleet__svg--tall { display: block; } }
+    .fl-name { font-size: 18px; }
+    .fl-role { font-family: var(--font-mono); font-size: 8.5px; font-weight: 600; letter-spacing: 0.12em; }
+    .fl-role-owner { fill: var(--color-accent-primary); }
+    .fl-role-standby { fill: var(--color-fg-subtle); }
+    .fl-role-lead { fill: var(--color-saffron); }
+    .fl-purpose { font-family: var(--font-mono); font-size: 10px; fill: var(--color-fg-muted); }
+    .fl-agentslabel { font-family: var(--font-mono); font-size: 8.5px; fill: var(--color-fg-subtle); letter-spacing: 0.16em; }
+    .fl-agent-chip { fill: oklch(1 0 0 / 0.05); stroke: oklch(1 0 0 / 0.10); stroke-width: 1; }
+    .fl-agent { font-family: var(--font-mono); font-size: 10px; fill: var(--color-fg-base); }
+    .fl-host--cold { stroke: var(--color-fg-subtle); stroke-dasharray: 5 5; }
+    .fl-cold { opacity: 0.5; }
+    .fl-coldtag { font-family: var(--font-mono); font-size: 8.5px; font-weight: 600; fill: var(--color-saffron); letter-spacing: 0.1em; }
+    .fl-flow { fill: none; stroke: var(--color-accent-primary); stroke-width: 2.6; stroke-dasharray: 2 13; stroke-linecap: round; opacity: 0.9; animation: fl-flow 1.5s linear infinite; }
+    @keyframes fl-flow { to { stroke-dashoffset: -15; } }
+    .fleet__caption { color: var(--color-fg-muted); font-size: var(--text-sm); font-family: var(--font-mono); line-height: 1.65; text-align: center; max-width: 64ch; margin: var(--space-lg) auto 0; }
+    .fleet__caption code { color: var(--color-fg-base); }
+
+    /* diagram primitives — colours via CSS so the design tokens drive the SVG */
+    .fl-line { fill: none; stroke: var(--color-fg-subtle); stroke-width: 1.4; }
+    .fl-line--standby { stroke-dasharray: 3 7; opacity: 0.45; }
+    .fl-line--owner { stroke: var(--color-accent-primary); stroke-width: 2.4; filter: drop-shadow(0 0 5px var(--color-accent-glow)); }
+    .fl-arc { fill: none; stroke: var(--color-accent-primary); stroke-width: 1.6; stroke-dasharray: 5 5; opacity: 0; }
+    .fl-host { fill: var(--color-bg-elevated); stroke: oklch(1 0 0 / 0.12); stroke-width: 1; }
+    .fl-host--owner { stroke: var(--color-accent-primary); stroke-width: 1.6; }
+    .fl-chip { fill: oklch(1 0 0 / 0.06); }
+    .fl-name { font-family: var(--font-heading); font-style: italic; font-size: 20px; fill: var(--color-fg-base); }
+    .fl-meta { font-family: var(--font-mono); font-size: 11px; fill: var(--color-fg-subtle); letter-spacing: 0.08em; }
+    .fl-badge { font-family: var(--font-mono); font-size: 10px; font-weight: 600; fill: var(--color-accent-primary); letter-spacing: 0.16em; }
+    .fl-bell-body { fill: var(--color-bg-elevated); stroke: var(--color-accent-primary); stroke-width: 1.6; }
+    .fl-bell-clapper { fill: var(--color-accent-primary); }
+    .fl-bell-label { font-family: var(--font-mono); font-size: 12px; fill: var(--color-fg-muted); letter-spacing: 0.12em; text-anchor: middle; }
+    .fl-halo { fill: none; stroke: var(--color-accent-primary); stroke-width: 1.3; opacity: 0.5; transform-box: fill-box; transform-origin: center; animation: fl-halo 3.4s ease-in-out infinite; }
+    .fl-sendto { stroke: var(--color-sky-deep); stroke-width: 1.2; stroke-dasharray: 2 5; opacity: 0.85; }
+    .fl-sendto-label { font-family: var(--font-mono); font-size: 10px; fill: var(--color-fg-subtle); letter-spacing: 0.1em; text-anchor: middle; }
+    #fl-arrow path { fill: var(--color-sky-deep); }
+    #fl-arrow-arc path { fill: var(--color-accent-primary); }
+
+    /* ownership cross-fade. Default = Jinn (priority-1 primary) owns. The global reduced-motion
+       rule freezes these to their base values, which equal the Jinn-owner state. */
+    .fl-own-standby { opacity: 0; animation: fl-own-standby 8.5s var(--ease-standard) infinite; }
+    .fl-own-primary { animation: fl-own-primary 8.5s var(--ease-standard) infinite; }
+    .fl-arc { animation: fl-arc 8.5s var(--ease-standard) infinite; }
+    @keyframes fl-own-primary { 0%,54%,100% { opacity: 1; } 66%,82% { opacity: 0; } }
+    @keyframes fl-own-standby { 0%,54%,100% { opacity: 0; } 66%,82% { opacity: 1; } }
+    @keyframes fl-arc { 0%,50%,100% { opacity: 0; } 60%,86% { opacity: 0.75; } }
+    @keyframes fl-halo { 0%,100% { opacity: 0.5; transform: scale(1); } 50% { opacity: 0.12; transform: scale(1.22); } }
+
+    .fleet__features { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-lg); margin-top: var(--space-2xl); }
+    .fleet__feature { background: var(--color-bg-base); border: var(--border-subtle); border-top: 2px solid var(--color-accent-primary); border-radius: var(--radius-md); padding: var(--space-lg); }
+    .fleet__feature h3 { font-family: var(--font-heading); font-size: var(--text-1); font-weight: var(--font-weight-heading); line-height: 1.15; color: var(--color-fg-base); margin-bottom: var(--space-sm); }
+    .fleet__feature p { color: var(--color-fg-muted); font-size: var(--text-sm); line-height: 1.6; }
+    .fleet__feature p + p { margin-top: var(--space-sm); }
+    .fleet__feature code { font-family: var(--font-mono); font-size: 0.9em; color: var(--color-fg-base); }
+    @media (max-width: 860px) { .fleet__features { grid-template-columns: 1fr; } }
+    /* Below 560px the wide SVG hides and a dedicated portrait re-layout (bell on top,
+       hosts stacked, cables down the left gutter) takes over — see .fleet__svg--tall. */
+
     /* ARCHITECTURE diagram */
     .arch { background: var(--color-bg-surface); border: var(--border-subtle); border-radius: var(--radius-lg); padding: var(--space-2xl) var(--space-xl); }
     .arch__diagram { display: grid; gap: var(--space-md); justify-items: center; font-family: var(--font-mono); font-size: var(--text-sm); }
     .arch__row { display: flex; justify-content: center; gap: var(--space-md); flex-wrap: wrap; width: 100%; }
     .arch__node { padding: var(--space-sm) var(--space-md); border: 1px solid oklch(1 0 0 / 0.12); border-radius: var(--radius-sm); background: var(--color-bg-elevated); color: var(--color-fg-base); white-space: nowrap; }
     .arch__node--telegram { border-color: var(--color-sky); color: var(--color-sky); }
-    .arch__node--daemon { border-color: var(--color-ember); color: var(--color-ember); padding: var(--space-md) var(--space-xl); font-weight: var(--font-weight-semibold); }
-    .arch__node--session { border-color: var(--color-sage); color: var(--color-sage); }
+    .arch__node--daemon { border-color: var(--color-accent-primary); color: var(--color-fg-base); padding: var(--space-md) var(--space-xl); font-weight: var(--font-weight-semibold); box-shadow: 0 0 0 1px var(--color-accent-glow); }
+    .arch__node--peer { border-style: dashed; border-color: var(--color-fg-subtle); color: var(--color-fg-muted); }
+    .arch__node--session { border-color: var(--color-sky-deep); color: var(--color-fg-muted); }
     .arch__node small { display: block; color: var(--color-fg-subtle); font-size: 0.7rem; margin-top: 2px; text-transform: uppercase; letter-spacing: var(--letter-spacing-overline); }
     .arch__edge { color: var(--color-fg-subtle); font-size: var(--text-1); line-height: 1; user-select: none; }
+    .arch__meshlabel { font-family: var(--font-mono); font-size: 0.72rem; color: var(--color-fg-subtle); letter-spacing: var(--letter-spacing-overline); text-transform: uppercase; text-align: center; }
     .arch__fanout { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--space-md); width: 100%; max-width: 640px; }
-    .arch__caption { color: var(--color-fg-muted); font-size: var(--text-sm); text-align: center; margin-top: var(--space-lg); font-family: var(--font-mono); }
+    .arch__caption { color: var(--color-fg-muted); font-size: var(--text-sm); text-align: center; margin-top: var(--space-lg); font-family: var(--font-mono); line-height: 1.6; }
+    .arch__caption strong { color: var(--color-fg-base); font-weight: var(--font-weight-semibold); }
     @media (max-width: 640px) {
       .arch__fanout { grid-template-columns: 1fr; }
       .arch__node { width: 100%; text-align: center; }
@@ -303,8 +381,9 @@
     /* FOOTER */
     .footer { padding: var(--space-2xl) var(--grid-margin); border-top: var(--border-subtle); }
     .footer__container { max-width: var(--grid-max-width); margin-inline: auto; display: flex; justify-content: space-between; gap: var(--space-md); flex-wrap: wrap; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-fg-subtle); }
-    .footer a { color: var(--color-fg-muted); text-decoration: underline; text-decoration-color: oklch(0.78 0.14 55 / 0.4); text-underline-offset: 3px; transition: color var(--duration-micro) var(--ease-standard); }
+    .footer a { color: var(--color-fg-muted); text-decoration: underline; text-decoration-color: oklch(0.61 0.12 245 / 0.4); text-underline-offset: 3px; transition: color var(--duration-micro) var(--ease-standard); }
     .footer a:hover, .footer a:focus-visible { color: var(--color-accent-primary); }
+    .footer__coming { max-width: var(--grid-max-width); margin: var(--space-md) auto 0; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-fg-subtle); opacity: 0.85; }
   </style>
 </head>
 <body>
@@ -323,6 +402,7 @@
       </a>
       <ul class="nav__links">
         <li><a href="#what" class="nav__link">What</a></li>
+        <li><a href="#fleet" class="nav__link">Fleet</a></li>
         <li><a href="#architecture" class="nav__link">Architecture</a></li>
         <li><a href="#trust" class="nav__link">Trust</a></li>
         <li><a href="#start" class="nav__link">Quick start</a></li>
@@ -336,27 +416,27 @@
     <section class="hero" aria-labelledby="hero-heading">
       <div class="hero__container">
         <div class="hero__content">
-          <p class="hero__overline">harteWired Lab · belfry</p>
-          <h1 class="hero__headline" id="hero-heading">One bot.<br>Many <em>sessions</em>.</h1>
-          <p class="hero__subhead">Telegram-to-terminal MUX rigging for remote-driving multiple Claude Code projects. Status from N parallel sessions fans out to one Telegram feed; replies route back into the matching session as if you'd typed them at the prompt.</p>
+          <p class="hero__overline">Multi-machine Claude Code, over Telegram</p>
+          <h1 class="hero__headline" id="hero-heading">Drive your whole Claude Code <em>fleet</em> from one chat.</h1>
+          <p class="hero__subhead">belfry bridges every Claude Code session across every machine to one Telegram bot — and when the host owning the bot dies, another takes over in about one minute and hands back when it returns.</p>
           <div class="hero__cta">
             <a href="https://github.com/harteWired/belfry" class="btn btn--primary" target="_blank" rel="noopener noreferrer">View on GitHub <span aria-hidden="true">&rarr;</span></a>
-            <a href="#start" class="btn btn--ghost">Quick start</a>
+            <a href="#fleet" class="btn btn--ghost">See the fleet</a>
           </div>
           <p class="hero__meta">
-            <span><strong>Phase 2</strong> shipped</span>
+            <span><strong>Self-healing</strong> fleet</span>
+            <span><strong>~30–90s</strong> failover</span>
             <span><strong>Node</strong> &ge; 20</span>
-            <span><strong>1 dep</strong> · chokidar</span>
-            <span><strong>Loopback</strong> only</span>
+            <span><strong>MIT</strong> · open source</span>
           </p>
         </div>
         <div class="hero__visual" aria-hidden="true">
           <svg class="hero__rings" viewBox="0 0 600 600" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="300" cy="300" r="60"  fill="none" stroke="oklch(0.78 0.14 55)"  stroke-width="1.4" opacity="0.20"/>
-            <circle cx="300" cy="300" r="120" fill="none" stroke="oklch(0.72 0.12 165)" stroke-width="1.3" opacity="0.16"/>
-            <circle cx="300" cy="300" r="180" fill="none" stroke="oklch(0.78 0.14 55)"  stroke-width="1.2" opacity="0.13"/>
-            <circle cx="300" cy="300" r="240" fill="none" stroke="oklch(0.72 0.12 165)" stroke-width="1.1" opacity="0.10"/>
-            <circle cx="300" cy="300" r="285" fill="none" stroke="oklch(0.78 0.14 55)"  stroke-width="1.0" opacity="0.08"/>
+            <circle cx="300" cy="300" r="60"  fill="none" stroke="oklch(0.61 0.12 245)" stroke-width="1.4" opacity="0.22"/>
+            <circle cx="300" cy="300" r="120" fill="none" stroke="oklch(0.50 0.13 250)" stroke-width="1.3" opacity="0.17"/>
+            <circle cx="300" cy="300" r="180" fill="none" stroke="oklch(0.61 0.12 245)" stroke-width="1.2" opacity="0.14"/>
+            <circle cx="300" cy="300" r="240" fill="none" stroke="oklch(0.50 0.13 250)" stroke-width="1.1" opacity="0.11"/>
+            <circle cx="300" cy="300" r="285" fill="none" stroke="oklch(0.61 0.12 245)" stroke-width="1.0" opacity="0.09"/>
           </svg>
           <img class="hero__rabbit" src="assets/whiterabbiticon2.png" alt="" width="400" height="400" loading="eager">
           <div class="hero__bell" title="ping">ping</div>
@@ -367,9 +447,9 @@
     <section class="section" id="what" aria-labelledby="what-heading">
       <div class="section__container">
         <header class="section__header reveal">
-          <p class="section__overline">Two flows, one daemon</p>
+          <p class="section__overline">Two flows, one bot</p>
           <h2 class="section__heading" id="what-heading">What belfry does</h2>
-          <p class="section__description">Anthropic's bundled <code>plugin:telegram</code> handles bidirectional chat for one specific session. belfry is the inverse: bidirectional, multi-terminal, per-slug whitelist. Install once, subscribe the projects you care about.</p>
+          <p class="section__description">Anthropic's bundled <code>plugin:telegram</code> handles bidirectional chat for one specific session. belfry is the inverse: bidirectional, multi-terminal, multi-host. Install once, subscribe the projects you care about, and every session — wherever it runs — shares the same chat.</p>
         </header>
 
         <div class="pair">
@@ -393,27 +473,238 @@
       </div>
     </section>
 
-    <section class="section section--surface" id="architecture" aria-labelledby="arch-heading">
+    <section class="section section--surface" id="fleet" aria-labelledby="fleet-heading">
       <div class="section__container">
         <header class="section__header reveal">
-          <p class="section__overline">One process owns the bot</p>
+          <p class="section__overline">No single point of failure</p>
+          <h2 class="section__heading" id="fleet-heading">The fleet</h2>
+          <p class="section__description">belfry is no longer one host relaying one terminal. Every machine you run joins a mesh over Tailscale, shares the one Telegram bot, and covers for the others. The highest-priority host that can reach Telegram owns the bot; lose it &mdash; to process death, or just a dead path to Telegram &mdash; and a standby takes over in ~30&ndash;90s, then hands back when the primary recovers.</p>
+        </header>
+
+        <figure class="fleet reveal">
+          <div class="fleet__figure">
+            <svg class="fleet__svg fleet__svg--wide" viewBox="0 0 1120 580" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Fleet diagram: four owner-capable machines — Jinn (current owner), Erebus and Severin (standbys), and Fornax (the designated always-on lead, not yet online, shown cold) — each running Claude Code agents and connected up to one shared Telegram bell. The highest-priority reachable host holds the bot; with Fornax offline, Jinn owns it. Sessions message each other across hosts with send_to.">
+              <defs>
+                <marker id="fl-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+              </defs>
+
+              <!-- connectors: each host reaches up to the one bell; current owner solid+lit, standbys dashed+dim, the cold lead faintest -->
+              <path class="fl-line fl-line--standby" d="M426,350 L552,124"/>
+              <path class="fl-line fl-line--standby" d="M694,350 L568,124"/>
+              <path class="fl-line fl-line--standby fl-cold" d="M962,350 L584,124"/>
+              <path class="fl-line fl-line--owner" d="M158,350 L536,124"/>
+              <path class="fl-flow" d="M158,350 L536,124"/>
+
+              <!-- the one bell (Telegram bot) -->
+              <text x="560" y="40" class="fl-bell-label">one Telegram bot</text>
+              <g transform="translate(560,90)">
+                <circle class="fl-halo" r="38"/>
+                <path class="fl-bell-body" d="M0,-28 C2.8,-28 3.8,-25 1.9,-23.3 C12,-20.5 16.8,-9.3 16.8,1.9 C16.8,9.3 18.6,13 22.4,16.8 L-22.4,16.8 C-18.6,13 -16.8,9.3 -16.8,1.9 C-16.8,-9.3 -12,-20.5 -1.9,-23.3 C-3.8,-25 -2.8,-28 0,-28 Z"/>
+                <circle class="fl-bell-clapper" cx="0" cy="21.5" r="3.4"/>
+              </g>
+
+              <!-- send_to: agents message each other, local or cross-host -->
+              <text class="fl-sendto-label" x="292" y="446">send_to</text>
+              <line class="fl-sendto" x1="270" y1="454" x2="314" y2="454" marker-start="url(#fl-arrow)" marker-end="url(#fl-arrow)"/>
+              <text class="fl-sendto-label" x="560" y="446">send_to</text>
+              <line class="fl-sendto" x1="538" y1="454" x2="582" y2="454" marker-start="url(#fl-arrow)" marker-end="url(#fl-arrow)"/>
+
+              <!-- Jinn -->
+              <g>
+                <rect class="fl-host" x="42" y="350" width="232" height="196" rx="12"/>
+                <rect class="fl-host--owner" x="42" y="350" width="232" height="196" rx="12" fill="none"/>
+                <text class="fl-role fl-role-owner" x="60" y="372">CURRENT OWNER</text>
+                <text class="fl-name" x="60" y="396">Jinn</text>
+                <text class="fl-meta" x="60" y="414">j · Linux (WSL)</text>
+                <text class="fl-purpose" x="60" y="434">Primary workstation</text>
+                <text class="fl-purpose" x="60" y="448">+ Telegram bot owner</text>
+                <text class="fl-agentslabel" x="60" y="470">AGENTS</text>
+                <rect class="fl-agent-chip" x="60" y="476" width="196" height="18" rx="5"/>
+                <text class="fl-agent" x="70" y="489">belfry</text>
+                <rect class="fl-agent-chip" x="60" y="498" width="196" height="18" rx="5"/>
+                <text class="fl-agent" x="70" y="511">claudelike-bar</text>
+                <rect class="fl-agent-chip" x="60" y="520" width="196" height="18" rx="5"/>
+                <text class="fl-agent" x="70" y="533">web-design</text>
+              </g>
+              <!-- Erebus -->
+              <g>
+                <rect class="fl-host" x="310" y="350" width="232" height="196" rx="12"/>
+                <text class="fl-role fl-role-standby" x="328" y="372">STANDBY</text>
+                <text class="fl-name" x="328" y="396">Erebus</text>
+                <text class="fl-meta" x="328" y="414">e · Windows NUC</text>
+                <text class="fl-purpose" x="328" y="434">Always-on worker</text>
+                <text class="fl-purpose" x="328" y="448">+ failover standby</text>
+                <text class="fl-agentslabel" x="328" y="470">AGENTS</text>
+                <rect class="fl-agent-chip" x="328" y="476" width="196" height="18" rx="5"/>
+                <text class="fl-agent" x="338" y="489">erebus-master (keeper)</text>
+                <rect class="fl-agent-chip" x="328" y="498" width="196" height="18" rx="5"/>
+                <text class="fl-agent" x="338" y="511">gmail-watcher</text>
+                <rect class="fl-agent-chip" x="328" y="520" width="196" height="18" rx="5"/>
+                <text class="fl-agent" x="338" y="533">plex-manager</text>
+              </g>
+              <!-- Severin -->
+              <g>
+                <rect class="fl-host" x="578" y="350" width="232" height="196" rx="12"/>
+                <text class="fl-role fl-role-standby" x="596" y="372">STANDBY</text>
+                <text class="fl-name" x="596" y="396">Severin</text>
+                <text class="fl-meta" x="596" y="414">s · NAS · Linux</text>
+                <text class="fl-purpose" x="596" y="434">Network storage (NAS)</text>
+                <text class="fl-purpose" x="596" y="448">+ always-on services</text>
+                <text class="fl-agentslabel" x="596" y="470">AGENTS</text>
+                <rect class="fl-agent-chip" x="596" y="476" width="196" height="18" rx="5"/>
+                <text class="fl-agent" x="606" y="489">system-monitor</text>
+                <rect class="fl-agent-chip" x="596" y="498" width="196" height="18" rx="5"/>
+                <text class="fl-agent" x="606" y="511">config-agent</text>
+              </g>
+              <!-- Fornax -->
+              <g class="fl-cold">
+                <rect class="fl-host fl-host--cold" x="846" y="350" width="232" height="196" rx="12"/>
+                <text class="fl-role fl-role-lead" x="864" y="372">DESIGNATED LEAD · COMING ONLINE</text>
+                <text class="fl-name" x="864" y="396">Fornax</text>
+                <text class="fl-meta" x="864" y="414">f · Raspberry Pi</text>
+                <text class="fl-purpose" x="864" y="434">Pi-hole + Unbound DNS</text>
+                <text class="fl-purpose" x="864" y="448">ADS-B flight tracking · tasks</text>
+                <text class="fl-agentslabel" x="864" y="470">AGENTS</text>
+                <rect class="fl-agent-chip" x="864" y="476" width="196" height="18" rx="5"/>
+                <text class="fl-agent" x="874" y="489">pi-hole</text>
+                <rect class="fl-agent-chip" x="864" y="498" width="196" height="18" rx="5"/>
+                <text class="fl-agent" x="874" y="511">adsb/dump1090</text>
+                <rect class="fl-agent-chip" x="864" y="520" width="196" height="18" rx="5"/>
+                <text class="fl-agent" x="874" y="533">scheduler</text>
+              </g>
+            </svg>
+
+            <!-- Portrait re-layout (≤560px): bell on top, hosts stacked, cables down the left gutter -->
+            <svg class="fleet__svg fleet__svg--tall" viewBox="0 0 380 1090" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Fleet diagram (portrait): one Telegram bell at top; four stacked machines — Jinn (current owner), Erebus and Severin (standbys), and Fornax (designated always-on lead, not yet online, shown cold) — each cabled up to the one bell, each showing its purpose and example agents.">
+              <defs>
+                <marker id="fl-arrow-t" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z"/></marker>
+              </defs>
+              <!-- cables from the one bell down the left gutter to each host -->
+              <path class="fl-line fl-line--standby" d="M190,90 Q40,300 30,467"/>
+              <path class="fl-line fl-line--standby" d="M190,90 Q24,470 30,707"/>
+              <path class="fl-line fl-line--standby fl-cold" d="M190,90 Q12,650 30,947"/>
+              <path class="fl-line fl-line--owner" d="M190,90 Q70,150 30,227"/>
+              <path class="fl-flow" d="M190,90 Q70,150 30,227"/>
+
+              <text x="190" y="24" class="fl-bell-label">one Telegram bot</text>
+              <g transform="translate(190,60)">
+                <circle class="fl-halo" r="34"/>
+                <path class="fl-bell-body" d="M0,-26 C2.6,-26 3.5,-23 1.7,-21.5 C11,-19 15.5,-8.5 15.5,1.7 C15.5,8.5 17,12 20.5,15.5 L-20.5,15.5 C-17,12 -15.5,8.5 -15.5,1.7 C-15.5,-8.5 -11,-19 -1.7,-21.5 C-3.5,-23 -2.6,-26 0,-26 Z"/>
+                <circle class="fl-bell-clapper" cx="0" cy="20" r="3.1"/>
+              </g>
+
+              <!-- send_to between stacked hosts -->
+              <line class="fl-sendto" x1="345" y1="336" x2="345" y2="358" marker-start="url(#fl-arrow-t)" marker-end="url(#fl-arrow-t)"/>
+              <line class="fl-sendto" x1="345" y1="576" x2="345" y2="598" marker-start="url(#fl-arrow-t)" marker-end="url(#fl-arrow-t)"/>
+
+              <!-- Jinn -->
+              <g>
+                <rect class="fl-host" x="30" y="120" width="320" height="214" rx="12"/>
+                <rect class="fl-host--owner" x="30" y="120" width="320" height="214" rx="12" fill="none"/>
+                <text class="fl-role fl-role-owner" x="48" y="144">CURRENT OWNER</text>
+                <text class="fl-name" x="48" y="170">Jinn</text>
+                <text class="fl-meta" x="48" y="192">j · Linux (WSL)</text>
+                <text class="fl-purpose" x="48" y="214">Primary workstation</text>
+                <text class="fl-purpose" x="48" y="230">+ Telegram bot owner</text>
+                <text class="fl-agentslabel" x="48" y="256">AGENTS</text>
+                <rect class="fl-agent-chip" x="48" y="262" width="284" height="20" rx="5"/>
+                <text class="fl-agent" x="58" y="276">belfry</text>
+                <rect class="fl-agent-chip" x="48" y="284" width="284" height="20" rx="5"/>
+                <text class="fl-agent" x="58" y="298">claudelike-bar</text>
+                <rect class="fl-agent-chip" x="48" y="306" width="284" height="20" rx="5"/>
+                <text class="fl-agent" x="58" y="320">web-design</text>
+              </g>
+              <!-- Erebus -->
+              <g>
+                <rect class="fl-host" x="30" y="360" width="320" height="214" rx="12"/>
+                <text class="fl-role fl-role-standby" x="48" y="384">STANDBY</text>
+                <text class="fl-name" x="48" y="410">Erebus</text>
+                <text class="fl-meta" x="48" y="432">e · Windows NUC</text>
+                <text class="fl-purpose" x="48" y="454">Always-on worker</text>
+                <text class="fl-purpose" x="48" y="470">+ failover standby</text>
+                <text class="fl-agentslabel" x="48" y="496">AGENTS</text>
+                <rect class="fl-agent-chip" x="48" y="502" width="284" height="20" rx="5"/>
+                <text class="fl-agent" x="58" y="516">erebus-master (keeper)</text>
+                <rect class="fl-agent-chip" x="48" y="524" width="284" height="20" rx="5"/>
+                <text class="fl-agent" x="58" y="538">gmail-watcher</text>
+                <rect class="fl-agent-chip" x="48" y="546" width="284" height="20" rx="5"/>
+                <text class="fl-agent" x="58" y="560">plex-manager</text>
+              </g>
+              <!-- Severin -->
+              <g>
+                <rect class="fl-host" x="30" y="600" width="320" height="214" rx="12"/>
+                <text class="fl-role fl-role-standby" x="48" y="624">STANDBY</text>
+                <text class="fl-name" x="48" y="650">Severin</text>
+                <text class="fl-meta" x="48" y="672">s · NAS · Linux</text>
+                <text class="fl-purpose" x="48" y="694">Network storage (NAS)</text>
+                <text class="fl-purpose" x="48" y="710">+ always-on services</text>
+                <text class="fl-agentslabel" x="48" y="736">AGENTS</text>
+                <rect class="fl-agent-chip" x="48" y="742" width="284" height="20" rx="5"/>
+                <text class="fl-agent" x="58" y="756">system-monitor</text>
+                <rect class="fl-agent-chip" x="48" y="764" width="284" height="20" rx="5"/>
+                <text class="fl-agent" x="58" y="778">config-agent</text>
+              </g>
+              <!-- Fornax -->
+              <g class="fl-cold">
+                <rect class="fl-host fl-host--cold" x="30" y="840" width="320" height="214" rx="12"/>
+                <text class="fl-role fl-role-lead" x="48" y="864">DESIGNATED LEAD · COMING ONLINE</text>
+                <text class="fl-name" x="48" y="890">Fornax</text>
+                <text class="fl-meta" x="48" y="912">f · Raspberry Pi</text>
+                <text class="fl-purpose" x="48" y="934">Pi-hole + Unbound DNS</text>
+                <text class="fl-purpose" x="48" y="950">ADS-B flight tracking · tasks</text>
+                <text class="fl-agentslabel" x="48" y="976">AGENTS</text>
+                <rect class="fl-agent-chip" x="48" y="982" width="284" height="20" rx="5"/>
+                <text class="fl-agent" x="58" y="996">pi-hole</text>
+                <rect class="fl-agent-chip" x="48" y="1004" width="284" height="20" rx="5"/>
+                <text class="fl-agent" x="58" y="1018">adsb/dump1090</text>
+                <rect class="fl-agent-chip" x="48" y="1026" width="284" height="20" rx="5"/>
+                <text class="fl-agent" x="58" y="1040">scheduler</text>
+              </g>
+            </svg>
+          </div>
+          <figcaption class="fleet__caption">Four owner-capable machines, one bell. The highest-priority host that can reach Telegram holds it — so with <strong style="color:var(--color-fg-base)">Fornax</strong>, the designated always-on lead, not yet powered, <strong style="color:var(--color-fg-base)">Jinn</strong> currently owns the bot. When the host holding the bell drops, a reachable standby takes over in ~30&ndash;90s and hands back to the highest-priority host on recovery. Sessions message each other across hosts with <code>send_to</code>.</figcaption>
+        </figure>
+
+        <div class="fleet__features">
+          <article class="fleet__feature reveal">
+            <h3>Priority failover &amp; handback</h3>
+            <p>A fixed priority rank decides who holds the bot &mdash; the highest-priority host that can currently reach Telegram. Lose the owner to process death <em>or</em> a dead path to Telegram, and the next-highest standby takes the bell in ~30&ndash;90s.</p>
+            <p>When the primary recovers, it reclaims automatically &mdash; no manual failback.</p>
+          </article>
+          <article class="fleet__feature reveal">
+            <h3>Agent-to-agent <code>send_to</code></h3>
+            <p>Sessions message each other directly, on the same box or across hosts, addressed <code>&lt;letter&gt;/&lt;slug&gt;</code>. One session can hand a task to another &mdash; <code>e/erebus-master</code>, <code>j/web-design</code> &mdash; and the reply routes straight back.</p>
+          </article>
+          <article class="fleet__feature reveal">
+            <h3>Federated DM</h3>
+            <p>DM a session living on another host straight from Telegram. <code>/keeper</code> resolves to <code>e/erebus-master</code>, the daemon relays across the mesh, and the reply threads back to your chat &mdash; as if it were local.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="architecture" aria-labelledby="arch-heading">
+      <div class="section__container">
+        <header class="section__header reveal">
+          <p class="section__overline">Two processes per host, one owns the bot</p>
           <h2 class="section__heading" id="arch-heading">Architecture</h2>
-          <p class="section__description">A daemon owns the Telegram connection and the registry. Each session attaches over loopback HTTP. No multiplexer, no keystroke injection &mdash; the local terminal stays sovereign.</p>
+          <p class="section__description">Each host runs a daemon that owns its Telegram link and a loopback registry; each session attaches a small <code>belfry-mcp</code> plugin. Daemons federate over the <code>/fed</code> mesh on Tailscale &mdash; no multiplexer, no keystroke injection, and the local terminal stays sovereign.</p>
         </header>
 
         <div class="arch reveal">
-          <div class="arch__diagram" role="img" aria-label="belfry architecture: Telegram bot connects to one daemon, which fans inbound replies to N session MCP plugins over loopback HTTP">
+          <div class="arch__diagram" role="img" aria-label="belfry architecture: one Telegram bot connects to a fleet of per-host daemons federated over the /fed mesh; the owner daemon fans inbound replies to its session MCP plugins over loopback HTTP">
             <div class="arch__row"><span class="arch__node arch__node--telegram">Telegram &middot; one bot, one chat</span></div>
             <div class="arch__edge" aria-hidden="true">&updownarrow;</div>
-            <div class="arch__row"><span class="arch__node arch__node--daemon">belfry-daemon<small>bin/belfry.js</small></span></div>
-            <div class="arch__row" aria-hidden="true">
-              <span class="arch__edge">&darr;</span>
-              <span class="arch__edge" style="opacity:0;">&middot;</span>
-              <span class="arch__edge">&darr;</span>
-            </div>
             <div class="arch__row">
-              <span class="arch__node">outbound watcher</span>
-              <span class="arch__node">HTTP loopback registry</span>
+              <span class="arch__node arch__node--peer">peer daemon &middot; Erebus<small>standby</small></span>
+              <span class="arch__node arch__node--daemon">belfry-daemon &middot; Jinn<small>owner &middot; bin/belfry.js</small></span>
+              <span class="arch__node arch__node--peer">peer daemon &middot; Severin<small>standby</small></span>
+            </div>
+            <div class="arch__meshlabel" aria-hidden="true">&harr; /fed mesh over Tailscale &middot; bearer-gated, fail-closed &harr;</div>
+            <div class="arch__edge" aria-hidden="true">&darr; loopback HTTP</div>
+            <div class="arch__row">
+              <span class="arch__node">outbound watcher<small>chokidar</small></span>
+              <span class="arch__node">loopback registry<small>127.0.0.1, token-gated</small></span>
             </div>
             <div class="arch__edge" aria-hidden="true">&darr;</div>
             <div class="arch__fanout">
@@ -422,12 +713,12 @@
               <span class="arch__node arch__node--session">session C<small>belfry-mcp</small></span>
             </div>
           </div>
-          <p class="arch__caption">Daemon binds <code>127.0.0.1:49876</code>. Plugins authenticate with a 32-byte bearer token at <code>~/.local/state/belfry/registry.token</code> (mode 0600).</p>
+          <p class="arch__caption">Two processes per host: the <strong>daemon</strong> owns the Telegram link and registry; each session runs a tiny <code>belfry-mcp</code> plugin attached over loopback. Daemons gossip peer state across the <code>/fed</code> mesh &mdash; the highest-priority host that can reach Telegram owns the bot.</p>
         </div>
       </div>
     </section>
 
-    <section class="section" id="trust" aria-labelledby="trust-heading">
+    <section class="section section--surface" id="trust" aria-labelledby="trust-heading">
       <div class="section__container">
         <header class="section__header reveal">
           <p class="section__overline">Read this first</p>
@@ -445,8 +736,8 @@
             <p>Inbound from any chat ID other than <code>BELFRY_CHAT_ID</code> is silently dropped. Don't add the bot to a group whose chat ID could collide; don't expand the allowlist without thinking through who that gives shell-equivalent access to.</p>
           </div>
           <div class="trust__item reveal">
-            <h3>Loopback only</h3>
-            <p>The registry binds <code>127.0.0.1</code> and gates every endpoint on a 32-byte bearer token. Other UIDs on the host can't register fake slugs or call <code>/send</code>. Don't change the binding to <code>0.0.0.0</code> &mdash; the trust model assumes loopback.</p>
+            <h3>Registry stays on loopback</h3>
+            <p>The registry binds <code>127.0.0.1</code> and gates every endpoint on a 32-byte bearer token. Other UIDs can't register fake slugs or call <code>/send</code>. Cross-host traffic never touches it directly &mdash; it rides the separate, bearer-gated <code>/fed</code> mesh. Don't rebind to <code>0.0.0.0</code>.</p>
           </div>
           <div class="trust__item reveal">
             <h3>Rotate on suspicion</h3>
@@ -457,19 +748,27 @@
             <p><code>/tmp/claude-dashboard/</code> should be 0700 with files 0600. The daemon warns at startup if it finds wider modes &mdash; <code>chmod 700</code> to tighten. Otherwise prompt and response text in <code>last_response</code> is readable by other UIDs.</p>
           </div>
           <div class="trust__item reveal">
-            <h3>Summarizer leaves the host</h3>
-            <p>If <code>ANTHROPIC_API_KEY</code> is set, the optional Haiku summarizer sends prompts and responses to <code>api.anthropic.com</code>. The no-key fallback is a hard truncate that never leaves the machine. Opt-in per slug.</p>
+            <h3>The brain is opt-in egress</h3>
+            <p>belfry's conversational brain and summarizer run on your Claude.ai subscription via OAuth &mdash; no API key. When they run, prompt + response pairs go to Claude.ai, the same data path your interactive Claude Code sessions already use. No subscription (or no <code>claude</code> on PATH) and the brain simply doesn't start; summarize falls back to a local truncate. Voice transcription is a separate opt-in &mdash; notes leave the host only when <code>BELFRY_TRANSCRIBE_KEY</code> is set.</p>
+          </div>
+          <div class="trust__item reveal">
+            <h3>The mesh is fail-closed</h3>
+            <p>The <code>/fed</code> mesh refuses to start without <code>BELFRY_FED_TOKEN</code>. Every cross-host call is bearer-gated; a peer that can't present the token is ignored. No token, no mesh &mdash; it fails closed, never open.</p>
+          </div>
+          <div class="trust__item reveal">
+            <h3>Nothing is logged</h3>
+            <p>belfry records event metadata only &mdash; slug, state, timing. No prompt or response text is written to disk or carried across the mesh. What you say to a session stays on that session's host.</p>
           </div>
         </div>
       </div>
     </section>
 
-    <section class="section section--surface" id="start" aria-labelledby="start-heading">
+    <section class="section" id="start" aria-labelledby="start-heading">
       <div class="section__container">
         <header class="section__header reveal">
           <p class="section__overline">Five minutes, six commands</p>
           <h2 class="section__heading" id="start-heading">Quick start</h2>
-          <p class="section__description">Single-user, single-platform (Telegram), single-host (loopback). No SDK; only runtime dep is <code>chokidar</code>.</p>
+          <p class="section__description">Single-user, single-platform (Telegram). Start on one host; add machines to the mesh later. No SDK; only runtime dep is <code>chokidar</code>.</p>
         </header>
 
         <ol class="steps">
@@ -525,9 +824,10 @@
 
   <footer class="footer">
     <div class="footer__container">
-      <p>Built by <a href="https://github.com/harteWired" target="_blank" rel="noopener noreferrer">harteWired</a> &times; Claude Code</p>
+      <p>Built by <a href="https://github.com/harteWired" target="_blank" rel="noopener noreferrer">harteWired</a> &times; Claude Code &middot; <a href="https://github.com/harteWired/belfry/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT</a></p>
       <p><a href="https://github.com/harteWired/belfry" target="_blank" rel="noopener noreferrer">Source</a> &middot; <a href="https://lab.mattharte.com/" target="_blank" rel="noopener noreferrer">More from the lab</a></p>
     </div>
+    <p class="footer__coming">Coming: spawn a fresh terminal from Telegram &mdash; design-locked, not yet shipped.</p>
   </footer>
 
   <script>

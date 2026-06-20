@@ -206,4 +206,4 @@ Pure ESM, Node ≥ 20. Only runtime dependency is `chokidar`. Telegram client is
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE). Use it, fork it, ship it. The bot-token threat surface (see the Trust Model) is a deployment concern, not a licensing one — MIT's as-is, no-warranty terms fit a tool that hands shell-equivalent access to whoever holds the token.
+MIT — see [`LICENSE`](LICENSE).

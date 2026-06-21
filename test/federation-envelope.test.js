@@ -71,3 +71,27 @@ test('parseEnvelope preserves broadcast flag and ts', () => {
   assert.equal(parsed.envelope.broadcast, true);
   assert.equal(parsed.envelope.ts, 99);
 });
+
+// ── inbound kind: human Telegram message forwarded owner→owning-host (#38 Phase 2)
+test('builds + round-trips an inbound envelope with Telegram context', () => {
+  const env = buildEnvelope({
+    kind: 'inbound', from: { host: 'j' }, to: { host: 'e', slug: 'erebus-master' },
+    text: 'hi from matt', correlationId: 'corr-1', chatId: 8471234222, originatingMessageId: 3100,
+  });
+  assert.equal(env.kind, 'inbound');
+  assert.equal(env.from.host, 'j');
+  assert.deepEqual(env.to, { host: 'e', slug: 'erebus-master' });
+  assert.equal(env.chatId, 8471234222);
+  assert.equal(env.originatingMessageId, 3100);
+  const p = parseEnvelope(JSON.stringify(env));
+  assert.ok(p.ok);
+  assert.equal(p.envelope.correlationId, 'corr-1');
+  assert.equal(p.envelope.chatId, 8471234222);
+});
+
+test('inbound requires correlationId, chatId, originatingMessageId', () => {
+  const base = { kind: 'inbound', from: { host: 'j' }, to: { host: 'e', slug: 'x' }, text: 'hi' };
+  assert.throws(() => buildEnvelope({ ...base, chatId: 1, originatingMessageId: 2 }), /correlationId/);
+  assert.throws(() => buildEnvelope({ ...base, correlationId: 'c', originatingMessageId: 2 }), /chatId/);
+  assert.throws(() => buildEnvelope({ ...base, correlationId: 'c', chatId: 1 }), /originatingMessageId/);
+});

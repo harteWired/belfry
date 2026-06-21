@@ -731,8 +731,24 @@ async function main() {
   // (no need to own the bot). Reuse sendOutbound — same chat (one bot, one
   // chat), so it quote-replies the owner's originating message, packs, swaps the
   // 👀→🫡 reaction, and records the reply-tracker, all for free.
-  registry.setRemoteReplyHandler(async ({ slug, text, remote }) =>
-    sendOutbound({ slug, text, replyToMessageId: remote.originatingMessageId }));
+  // Only wire it on a host that actually has Telegram creds: a sessionful
+  // BELFRY_FED_ONLY mesh node (no bot token/chat) would otherwise sendMessage
+  // with an undefined token and fail permanently. With the handler unset, /send
+  // falls through to the safe local path.
+  if (botToken && chatId) {
+    const localChatId = Number(chatId);
+    registry.setRemoteReplyHandler(async ({ slug, text, remote }) => {
+      // The originatingMessageId is a message id in the OWNER's chat, quote-
+      // replied here in THIS host's chat — correct only under the single-chat
+      // fleet invariant (one bot, one chat). Guard it so a divergent-chat
+      // misconfig fails loud (drops the quote) instead of silently misthreading.
+      if (Number.isInteger(remote?.chatId) && remote.chatId !== localChatId) {
+        log(`remote return-leg: forwarded chatId ${remote.chatId} != local ${localChatId} — sending unthreaded (fleet must share one chat)`);
+        return sendOutbound({ slug, text, replyToMessageId: null });
+      }
+      return sendOutbound({ slug, text, replyToMessageId: remote.originatingMessageId });
+    });
+  }
 
   const poller = new Poller({
     botToken,

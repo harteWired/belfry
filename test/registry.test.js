@@ -557,3 +557,16 @@ test('/send runs the A+ remote return-leg when the remote marker is set (#38 P2)
   assert.equal(reg.getRemoteOwesReply('rsess'), null, 'marker cleared after the reply');
   await reg.stop();
 });
+
+test('a FAILED remote return-leg still clears the marker (no 1h session wedge) (#38 P2 review)', async () => {
+  const reg = new Registry({ port: 0, recvTimeoutMs: 200, onSend: async () => ({ message_id: 1 }) });
+  reg.setRemoteReplyHandler(async () => { throw new Error('telegram 429'); });
+  await reg.start();
+  const url = `http://127.0.0.1:${reg.port}`;
+  await fetch(`${url}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ instance_id: 'wi', slug: 'wsess', cwd: '/x' }) });
+  reg.markRemoteOwesReply('wsess', { ownerHost: 'j', correlationId: 'c', chatId: 42, originatingMessageId: 9 });
+  const res = await fetch(`${url}/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ instance_id: 'wi', text: 'answer' }) });
+  assert.equal(res.status, 502, 'reports the send failure');
+  assert.equal(reg.getRemoteOwesReply('wsess'), null, 'marker cleared even on failure — no wedge onto the broken path');
+  await reg.stop();
+});

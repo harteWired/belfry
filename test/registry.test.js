@@ -537,3 +537,23 @@ test('remote owes-reply marker: set/get/clear + mutual exclusion with local (#38
   reg.clearRemoteOwesReply('rs');
   assert.equal(reg.getRemoteOwesReply('rs'), null);
 });
+
+test('/send runs the A+ remote return-leg when the remote marker is set (#38 P2)', async () => {
+  const remoteCalls = [], localCalls = [];
+  const reg = new Registry({
+    port: 0, recvTimeoutMs: 200,
+    onSend: async (a) => { localCalls.push(a); return { message_id: 1 }; },
+  });
+  reg.setRemoteReplyHandler(async ({ slug, text, remote }) => { remoteCalls.push({ slug, text, remote }); return { message_id: 777 }; });
+  await reg.start();
+  const url = `http://127.0.0.1:${reg.port}`;
+  await fetch(`${url}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ instance_id: 'ri', slug: 'rsess', cwd: '/x' }) });
+  reg.markRemoteOwesReply('rsess', { ownerHost: 'j', correlationId: 'c', chatId: 42, originatingMessageId: 9 });
+  const res = await fetch(`${url}/send`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ instance_id: 'ri', text: 'my answer' }) });
+  assert.deepEqual(await res.json(), { ok: true, message_id: 777 });
+  assert.equal(remoteCalls.length, 1, 'routed to the remote return-leg, not the local onSend');
+  assert.equal(localCalls.length, 0);
+  assert.equal(remoteCalls[0].remote.chatId, 42);
+  assert.equal(reg.getRemoteOwesReply('rsess'), null, 'marker cleared after the reply');
+  await reg.stop();
+});

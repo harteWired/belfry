@@ -280,6 +280,28 @@ test('pending reply marker has TTL and is cleared by clearOwesReply', () => {
   assert.equal(registry.getOwesReply('ttl-slug'), null);
 });
 
+test('owes-reply is a FIFO queue: multiple messages each get answered in order (no overwrite drop)', () => {
+  // The bug: a 2nd message OVERWROTE the 1st marker, so when the session
+  // answered both, the 1st reply was silently dropped. Now they queue.
+  registry.markOwesReply('q-slug', 100);
+  registry.markOwesReply('q-slug', 200);
+  registry.markOwesReply('q-slug', 300);
+  // Replies consume oldest-first, so each message threads to its own anchor.
+  assert.equal(registry.getOwesReply('q-slug'), 100);
+  registry.clearOwesReply('q-slug'); // answered #100
+  assert.equal(registry.getOwesReply('q-slug'), 200);
+  registry.clearOwesReply('q-slug'); // answered #200
+  assert.equal(registry.getOwesReply('q-slug'), 300);
+  registry.clearOwesReply('q-slug'); // answered #300
+  assert.equal(registry.getOwesReply('q-slug'), null);
+});
+
+test('owes-reply queue is bounded — oldest evicted past the cap', () => {
+  for (let i = 1; i <= 20; i++) registry.markOwesReply('cap-slug', i);
+  // Cap is 16, so the 4 oldest (1–4) were dropped; the front is now 5.
+  assert.equal(registry.getOwesReply('cap-slug'), 5);
+});
+
 test('brain endpoints dispatch to wired handlers, JSON in/out', async () => {
   const calls = [];
   const brainHandlers = {

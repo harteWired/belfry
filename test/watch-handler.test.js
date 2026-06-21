@@ -105,3 +105,24 @@ test('watchKeyboard uses stable alphabetical order regardless of watch state', (
   assert.equal(kb.inline_keyboard[1][0].callback_data, 'belfry:watch:mid');
   assert.equal(kb.inline_keyboard[2][0].callback_data, 'belfry:watch:zeta');
 });
+
+// ── Fleet-wide remote discovery (#47 Tier 1) ────────────────────────────────
+
+test('watch-menu lists a remote <host>/<slug> session and flags pings as pending', async () => {
+  // getSlugs feeds in a qualified remote slug (as bin/belfry.js does from the gossip map).
+  const { h, sent } = harness(fakeStore(), ['api', 'e/erebus-master']);
+  await h.onRequest({ action: 'watch-menu', messageId: 1 });
+  const labels = sent[0].replyMarkup.inline_keyboard.flat().map((b) => b.text);
+  assert.ok(labels.some((t) => t.includes('e/erebus-master')), 'remote slug appears in the menu');
+  // The remote row is toggleable (callback_data carries the qualified slug; the / survives).
+  const remoteBtn = sent[0].replyMarkup.inline_keyboard.flat().find((b) => b.text.includes('e/erebus-master'));
+  assert.equal(remoteBtn.callback_data, 'belfry:watch:e/erebus-master');
+  // The menu is honest that cross-host pings aren't wired yet (Tier 2).
+  assert.match(sent[0].text, /remote.*discovery|Tier 2/i);
+});
+
+test('watch-menu with only local slugs shows no remote note', async () => {
+  const { h, sent } = harness(fakeStore(), ['api', 'health-dash']);
+  await h.onRequest({ action: 'watch-menu', messageId: 1 });
+  assert.doesNotMatch(sent[0].text, /Tier 2|host\/slug/i);
+});

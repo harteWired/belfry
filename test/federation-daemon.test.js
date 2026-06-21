@@ -92,6 +92,13 @@ test('gossip: e announces its slugs and j learns e owns erebus-sess', async () =
   assert.ok(owners.get('jinn-local')?.has('j'));
 });
 
+test('remoteSlugs() lists peer slugs qualified, excluding this host (#47 Tier 1)', async () => {
+  await fedE.announceOnce(); // j learns e's slugs
+  const remote = fedJ.remoteSlugs();
+  assert.ok(remote.includes('e/erebus-sess'), 'j should see e/erebus-sess as a remote slug');
+  assert.ok(!remote.some((s) => s.startsWith('j/')), 'j must not list its own slugs as remote');
+});
+
 test('bare-slug send_to forwards across the mesh and delivers with agent provenance', async () => {
   await fedE.announceOnce(); // ensure j knows the owner
   const before = erebusSession.queue.length;

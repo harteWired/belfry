@@ -506,6 +506,9 @@ async function main() {
       const s = new Set();
       if (watcher) for (const x of watcher.getActiveSlugs()) s.add(x);
       for (const x of registry.knownSlugs()) s.add(x);
+      // Fleet-wide discovery (#47 Tier 1): list peer-owned sessions as
+      // `<letter>/<slug>` so they appear in the /watch menu alongside local ones.
+      if (federation) for (const x of federation.remoteSlugs()) s.add(x);
       return s;
     },
     send: ({ text, replyToMessageId, replyMarkup }) =>

@@ -372,7 +372,7 @@ async function main() {
   // count after fan-out). broadcast() + markOwesReply + tracker.start run
   // synchronously after any anchor-establishing await, so no session reply can
   // be processed before the threading + tracker are in place.
-  const onBroadcast = async ({ text, targetSlugs = null, excludeSlugs = null, messageId = null, source = 'telegram' }) => {
+  const onBroadcast = async ({ text, targetSlugs = null, excludeSlugs = null, messageId = null, source = 'telegram', quiet = false }) => {
     let anchorId = messageId;
     let cliPlaceholder = false;
     if (!anchorId) {
@@ -385,7 +385,13 @@ async function main() {
       }
     }
     const { count, slugs } = registry.broadcast(text, { targetSlugs, excludeSlugs });
-    if (anchorId && count > 0) {
+    // Fire-and-forget (`/all!`): fan the command out but DON'T mark every
+    // session as owing a reply or seed the completion tracker. A command-
+    // broadcast (e.g. compress) otherwise makes all N sessions auto-reply at
+    // once → the chat 429s. Quiet mode trades the per-session replies + roll-up
+    // for a single confirmation. (The fresher-inbound-supersedes note below
+    // applies to the normal, reply-collecting path.)
+    if (anchorId && count > 0 && !quiet) {
       // markOwesReply overwrites any prior pending marker for the slug, so a
       // session mid-directed-turn that's caught in a broadcast will thread its
       // next reply under the broadcast anchor (the "fresher inbound supersedes"
@@ -394,7 +400,7 @@ async function main() {
       broadcastTracker.start(anchorId, { expectedSlugs: slugs, timeoutMs: BROADCAST_TIMEOUT_MS });
     }
     const confirm = count > 0
-      ? `📡 broadcast to ${count} session(s): ${slugs.join(', ')}`
+      ? `📡 broadcast${quiet ? ' (fire-and-forget)' : ''} to ${count} session(s): ${slugs.join(', ')}`
       : '📡 broadcast — no sessions registered';
     try {
       if (cliPlaceholder && anchorId) {

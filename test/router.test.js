@@ -495,14 +495,29 @@ test('backwards compat: knownSlugs Set still works without hasSlug', () => {
 
 // ── Broadcast /all (#30) ──────────────────────────────────────────────────
 
-test('/all <body> routes to a broadcast action', () => {
+test('/all <body> routes to a broadcast action (not quiet)', () => {
   const r = route({ update: update({ text: '/all wrap up and commit' }), ...ctx() });
-  assert.deepEqual(r, { action: 'broadcast', text: 'wrap up and commit', messageId: 99 });
+  assert.deepEqual(r, { action: 'broadcast', text: 'wrap up and commit', quiet: false, messageId: 99 });
 });
 
 test('/all is case-insensitive and trims the body', () => {
   const r = route({ update: update({ text: '/ALL   status check  ' }), ...ctx() });
-  assert.deepEqual(r, { action: 'broadcast', text: 'status check', messageId: 99 });
+  assert.deepEqual(r, { action: 'broadcast', text: 'status check', quiet: false, messageId: 99 });
+});
+
+test('/all! <body> routes to a fire-and-forget (quiet) broadcast', () => {
+  const r = route({ update: update({ text: '/all! compress fast' }), ...ctx() });
+  assert.deepEqual(r, { action: 'broadcast', text: 'compress fast', quiet: true, messageId: 99 });
+});
+
+test('/all! is case-insensitive and trims the body', () => {
+  const r = route({ update: update({ text: '/ALL!  do the thing ' }), ...ctx() });
+  assert.deepEqual(r, { action: 'broadcast', text: 'do the thing', quiet: true, messageId: 99 });
+});
+
+test('bare "/all!" with no body falls through (not a broadcast)', () => {
+  const r = route({ update: update({ text: '/all!' }), ...ctx() });
+  assert.notEqual(r?.action, 'broadcast');
 });
 
 test('bare "all" without a slash is NOT a broadcast (too common in prose)', () => {

@@ -913,7 +913,7 @@ test('broadcast: dispatches to onBroadcast and reacts 👀 when sessions reached
   });
   await poller.tick();
   await flush();
-  assert.deepEqual(calls[0], { text: 'wrap up', messageId: 50, source: 'telegram' });
+  assert.deepEqual(calls[0], { text: 'wrap up', messageId: 50, source: 'telegram', quiet: false });
   assert.equal(reactions.length, 1);
   assert.equal(reactions[0].reaction[0].emoji, '👀');
   assert.equal(reactions[0].message_id, 50);

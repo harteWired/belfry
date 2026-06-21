@@ -354,3 +354,84 @@ test('forwardInbound returns forwarded:false for a slug no live peer owns', asyn
   const r = await fedJ.forwardInbound('nobody-owns-this', 'x', { chatId: 1, originatingMessageId: 2 });
   assert.equal(r.forwarded, false);
 });
+
+// ── reply-map sync: the Fornax-flip prerequisite (#38). A host that pings a
+// LOCAL session gossips the message_id→slug anchor so whichever host owns the
+// bot can resolve a quote-reply to that ping and forward it back. Uses a fresh
+// pair so the RECEIVER (the bot owner) can capture what it records.
+test('reply-map sync: source X gossips a local anchor → owner Y records it host-qualified', async () => {
+  const [pX, pY] = await Promise.all([freePort(), freePort()]);
+  const rX = new Registry({ port: 0, authToken: null });
+  const rY = new Registry({ port: 0, authToken: null });
+  await Promise.all([rX.start(), rY.start()]);
+  const recorded = []; // Y is the (sessionless) bot owner — captures synced anchors
+  const fX = await wireFederation({
+    registry: rX, port: pX,
+    fedConfig: {
+      enabled: true, hostLetter: 'x', hostName: 'X', token: TOKEN,
+      peers: [{ letter: 'y', name: 'Y', addr: `http://127.0.0.1:${pY}` }],
+    },
+  });
+  const fY = await wireFederation({
+    registry: rY, port: pY,
+    recordReplyMap: (msgId, qslug) => recorded.push([msgId, qslug]),
+    fedConfig: {
+      enabled: true, hostLetter: 'y', hostName: 'Y', token: TOKEN,
+      peers: [{ letter: 'x', name: 'X', addr: `http://127.0.0.1:${pX}` }],
+    },
+  });
+  try {
+    fakeSession(rX, 'x-sess'); // a live local session on X
+    await fX.syncReplyMap(5001, 'x-sess');
+    assert.deepEqual(recorded, [[5001, 'x/x-sess']], 'Y records the anchor as <sourceHost>/<slug>');
+
+    // Guard: a slug with no live local session on X never syncs (a forwarded
+    // quote-reply would land on nothing).
+    await fX.syncReplyMap(5002, 'ghost-slug');
+    // Guard: an already-qualified slug (bridge return-leg / daemon send) is skipped.
+    await fX.syncReplyMap(5003, 'y/remote');
+    // Guard: a non-integer message id is skipped (record() would reject it too).
+    await fX.syncReplyMap(undefined, 'x-sess');
+    assert.deepEqual(recorded, [[5001, 'x/x-sess']], 'guards suppressed all three — still one anchor');
+  } finally {
+    await Promise.all([fX.stop(), fY.stop()]);
+    await Promise.all([rX.stop(), rY.stop()]);
+  }
+});
+
+// The end-to-end loop: a synced anchor recorded into a REAL ReplyTracker on the
+// owner resolves a quote-reply to `<host>/<slug>`, which is exactly the shape
+// the inbound delivery target forwards back over the mesh (#38 P2). This binds
+// the resolution half (this feature) to the delivery half (forwardInbound).
+test('reply-map sync feeds a real ReplyTracker so the owner resolves a remote quote-reply', async () => {
+  const { ReplyTracker } = await import('../lib/reply-tracker.js');
+  const [pX, pY] = await Promise.all([freePort(), freePort()]);
+  const rX = new Registry({ port: 0, authToken: null });
+  const rY = new Registry({ port: 0, authToken: null });
+  await Promise.all([rX.start(), rY.start()]);
+  const ownerTracker = new ReplyTracker(); // in-memory (no persistPath)
+  const fX = await wireFederation({
+    registry: rX, port: pX,
+    fedConfig: {
+      enabled: true, hostLetter: 'x', hostName: 'X', token: TOKEN,
+      peers: [{ letter: 'y', name: 'Y', addr: `http://127.0.0.1:${pY}` }],
+    },
+  });
+  const fY = await wireFederation({
+    registry: rY, port: pY,
+    recordReplyMap: (msgId, qslug) => ownerTracker.record(msgId, qslug),
+    fedConfig: {
+      enabled: true, hostLetter: 'y', hostName: 'Y', token: TOKEN,
+      peers: [{ letter: 'x', name: 'X', addr: `http://127.0.0.1:${pX}` }],
+    },
+  });
+  try {
+    fakeSession(rX, 'x-sess');
+    await fX.syncReplyMap(7777, 'x-sess');
+    // The owner's tracker now resolves the quote-reply to a federation address.
+    assert.equal(ownerTracker.lookup(7777), 'x/x-sess');
+  } finally {
+    await Promise.all([fX.stop(), fY.stop()]);
+    await Promise.all([rX.stop(), rY.stop()]);
+  }
+});

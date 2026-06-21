@@ -95,3 +95,24 @@ test('inbound requires correlationId, chatId, originatingMessageId', () => {
   assert.throws(() => buildEnvelope({ ...base, correlationId: 'c', originatingMessageId: 2 }), /chatId/);
   assert.throws(() => buildEnvelope({ ...base, correlationId: 'c', chatId: 1 }), /originatingMessageId/);
 });
+
+// ── replymap kind: reply-tracker anchor gossiped to peers (#38 Fornax-flip)
+test('builds + round-trips a replymap envelope (host + messageId + slug, no to/text)', () => {
+  const env = buildEnvelope({ kind: 'replymap', from: { host: 'j' }, messageId: 5001, slug: 'api', ts: 11 });
+  assert.deepEqual(env, { v: ENVELOPE_VERSION, kind: 'replymap', from: { host: 'j' }, messageId: 5001, slug: 'api', ts: 11 });
+  const p = parseEnvelope(JSON.stringify(env));
+  assert.equal(p.ok, true);
+  assert.deepEqual(p.envelope, env);
+});
+
+test('replymap requires from.host, an integer messageId, and a non-empty slug', () => {
+  assert.throws(() => buildEnvelope({ kind: 'replymap', from: { host: 'jj' }, messageId: 1, slug: 'a' }), /from\.host must be/);
+  assert.throws(() => buildEnvelope({ kind: 'replymap', from: { host: 'j' }, messageId: 1.5, slug: 'a' }), /messageId must be an integer/);
+  assert.throws(() => buildEnvelope({ kind: 'replymap', from: { host: 'j' }, messageId: null, slug: 'a' }), /messageId must be an integer/);
+  assert.throws(() => buildEnvelope({ kind: 'replymap', from: { host: 'j' }, messageId: 1, slug: '' }), /slug must be a non-empty string/);
+});
+
+test('parseEnvelope rejects a replymap with a non-integer messageId on the wire (no throw)', () => {
+  const r = parseEnvelope({ v: ENVELOPE_VERSION, kind: 'replymap', from: { host: 'j' }, messageId: 'x', slug: 'api', ts: 1 });
+  assert.equal(r.ok, false);
+});

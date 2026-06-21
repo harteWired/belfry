@@ -1,6 +1,6 @@
 # Plan: #38 — One Telegram feed reaches the whole fleet, survives the owner dying
 
-**Branch:** `feature/agent-mesh`  ·  **Status:** Phase 1 (priority election) BUILT + tested ✅ · Phase 2 (inbound forwarding) not started
+**Branch:** `main`  ·  **Status:** Phase 1 (priority election) BUILT + tested + **DEPLOYED LIVE** (Jinn p1 / Erebus p2; failover + handback validated by a live kill test 2026-06-15) ✅ · Phase 2 (cross-host inbound forwarding) BUILT + tested + deployed ✅ · reply-tracker-sync (Fornax-flip prerequisite — gossip msgId→slug anchors so a remote/sessionless bot owner resolves quote-replies) BUILT + tested 2026-06-21 ✅ · remaining for the Fornax flip: fleet deploy → live quote-reply verify → flip Fornax→p1 · follow-ups #42 (fast heartbeat), #43 (startup contention)
 
 ## Problem
 

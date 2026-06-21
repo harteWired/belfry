@@ -287,6 +287,10 @@ async function main() {
     });
     if (result?.message_id) {
       replyTracker.record(result.message_id, slug);
+      // Gossip this anchor to peers so a quote-reply landing on whichever host
+      // owns the bot can resolve it back to this session (#38 Fornax-flip). No-op
+      // when federation is off or `slug` isn't a live local session.
+      federation?.syncReplyMap?.(result.message_id, slug);
       if (stashOriginal) oversizeCache.put(result.message_id, slug, stashOriginal);
     }
     recentMessages.push(slug, { kind: 'outbound', text: toSend });
@@ -343,6 +347,7 @@ async function main() {
         });
         if (result?.message_id) {
           replyTracker.record(result.message_id, entry.slug);
+          federation?.syncReplyMap?.(result.message_id, entry.slug);
           prevId = result.message_id;
         }
       } catch (err) {
@@ -473,6 +478,10 @@ async function main() {
           },
         },
         owner: telegramOwner,
+        // #38 Fornax-flip prerequisite — record a peer's gossiped reply-tracker
+        // anchor host-qualified, so a quote-reply to a remote session's ping
+        // that lands on this (bot-owning) host resolves and forwards back.
+        recordReplyMap: (msgId, qualifiedSlug) => replyTracker.record(msgId, qualifiedSlug),
         bind: fedBind,
         port: fedPort,
         log,

@@ -723,7 +723,16 @@ async function main() {
   // Bare slugs deliver locally exactly as before. The wrapper proxies the full
   // Poller `target` interface (deliver + hasSlug + knownSlugs); see
   // lib/delivery-target.js.
-  const deliveryTarget = makeDeliveryTarget({ registry, federation, fedBridgeSlug, log });
+  const deliveryTarget = makeDeliveryTarget({ registry, federation, fedBridgeSlug, chatId: Number(chatId), log });
+
+  // #38 Phase 2 return leg: when a remote session answers a HUMAN message that
+  // was forwarded here, its /send routes through this handler. sendMessage is
+  // non-exclusive, so this host sends the reply to the owner's chat directly
+  // (no need to own the bot). Reuse sendOutbound — same chat (one bot, one
+  // chat), so it quote-replies the owner's originating message, packs, swaps the
+  // 👀→🫡 reaction, and records the reply-tracker, all for free.
+  registry.setRemoteReplyHandler(async ({ slug, text, remote }) =>
+    sendOutbound({ slug, text, replyToMessageId: remote.originatingMessageId }));
 
   const poller = new Poller({
     botToken,

@@ -22,11 +22,17 @@ function fakeRegistry() {
 
 function fakeFederation(relayResult) {
   const relays = [];
+  const forwards = [];
   return {
     relays,
+    forwards,
     relayRemote(fromSlug, target, text) {
       relays.push({ fromSlug, target, text });
       return Promise.resolve(relayResult);
+    },
+    forwardInbound(target, text, ctx) {
+      forwards.push({ target, text, ctx });
+      return Promise.resolve({ forwarded: true, delivered: 1 });
     },
   };
 }
@@ -99,4 +105,25 @@ test('FED_SLUG_RE matches host-qualified targets only', () => {
   assert.ok(FED_SLUG_RE.test('j/api'));
   assert.ok(!FED_SLUG_RE.test('api'));
   assert.ok(!FED_SLUG_RE.test('erebus-master'));
+});
+
+test('a HUMAN inbound (has chatId + originatingMessageId) forwards via forwardInbound, not the agent relay (#38 P2)', async () => {
+  const registry = fakeRegistry();
+  const federation = fakeFederation();
+  const t = makeDeliveryTarget({ registry, federation, chatId: 8471234222 });
+  t.deliver('e/erebus-master', 'hi from matt', 3100);
+  await flush();
+  assert.equal(federation.forwards.length, 1, 'used the human inbound-forward path');
+  assert.deepEqual(federation.forwards[0], { target: 'e/erebus-master', text: 'hi from matt', ctx: { chatId: 8471234222, originatingMessageId: 3100 } });
+  assert.equal(federation.relays.length, 0, 'did NOT use the agent relay');
+});
+
+test('a cold federated send (no originatingMessageId) falls back to the agent relay', async () => {
+  const registry = fakeRegistry();
+  const federation = fakeFederation({ handled: true, ok: true });
+  const t = makeDeliveryTarget({ registry, federation, chatId: 8471234222 });
+  t.deliver('e/erebus-master', 'cold ping', null);
+  await flush();
+  assert.equal(federation.relays.length, 1, 'no Telegram context → agent relay');
+  assert.equal(federation.forwards.length, 0);
 });

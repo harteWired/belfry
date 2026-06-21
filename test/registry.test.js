@@ -517,3 +517,23 @@ test('POST /send-to returns 429 when the relay guard blocks', async () => {
   assert.equal((await res.json()).reason, 'rate');
   await guarded.stop();
 });
+
+test('remote owes-reply marker: set/get/clear + mutual exclusion with local (#38 P2)', () => {
+  const reg = new Registry({ log: () => {} });
+  // Setting the remote marker clears any local one for that slug.
+  reg.markOwesReply('rs', 100);
+  reg.markRemoteOwesReply('rs', { ownerHost: 'j', correlationId: 'c1', chatId: 42, originatingMessageId: 7 });
+  assert.equal(reg.getOwesReply('rs'), null, 'remote set clears the local marker');
+  const m = reg.getRemoteOwesReply('rs');
+  assert.equal(m.ownerHost, 'j');
+  assert.equal(m.chatId, 42);
+  assert.equal(m.originatingMessageId, 7);
+  // Setting a local marker clears the remote one.
+  reg.markOwesReply('rs', 200);
+  assert.equal(reg.getRemoteOwesReply('rs'), null, 'local set clears the remote marker');
+  assert.equal(reg.getOwesReply('rs'), 200);
+  // clearRemoteOwesReply removes it.
+  reg.markRemoteOwesReply('rs', { ownerHost: 'e', correlationId: 'c2', chatId: 1, originatingMessageId: 2 });
+  reg.clearRemoteOwesReply('rs');
+  assert.equal(reg.getRemoteOwesReply('rs'), null);
+});

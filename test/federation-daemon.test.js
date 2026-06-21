@@ -333,3 +333,24 @@ test('gossip propagates a host owner reachableAt to the peer (#38 advertising pa
     await Promise.all([rA.stop(), rB.stop()]);
   }
 });
+
+test('forwardInbound: owner J forwards a human msg → E delivers as human + sets remote marker (#38 P2)', async () => {
+  await fedE.announceOnce(); // J learns E owns erebus-sess
+  const before = erebusSession.queue.length;
+  const r = await fedJ.forwardInbound('erebus-sess', 'hi from matt', { chatId: 8471234222, originatingMessageId: 3100 });
+  assert.equal(r.forwarded, true, 'J reports the inbound forwarded');
+  assert.equal(erebusSession.queue.length, before + 1, 'E session received it via the human deliver path');
+  // E set the REMOTE owes-reply marker carrying J's Telegram context (so the
+  // session's reply can direct-send back), NOT a local marker.
+  const m = regE.getRemoteOwesReply('erebus-sess');
+  assert.ok(m, 'E has a remote owes-reply marker');
+  assert.equal(m.ownerHost, 'j');
+  assert.equal(m.chatId, 8471234222);
+  assert.equal(m.originatingMessageId, 3100);
+  regE.clearRemoteOwesReply('erebus-sess');
+});
+
+test('forwardInbound returns forwarded:false for a slug no live peer owns', async () => {
+  const r = await fedJ.forwardInbound('nobody-owns-this', 'x', { chatId: 1, originatingMessageId: 2 });
+  assert.equal(r.forwarded, false);
+});

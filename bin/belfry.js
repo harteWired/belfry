@@ -158,6 +158,20 @@ async function main() {
     log,
   });
 
+  // One chokepoint for "this outbound message_id belongs to a LOCAL session
+  // slug": persist it locally AND gossip the anchor to peers so whichever host
+  // owns the bot can resolve a quote-reply to it and forward the reply back
+  // (#38 Fornax-flip prerequisite). EVERY outbound sender — replies, status
+  // pings, /status digests, full-expand, rollup digests — records through here,
+  // centralized so a new send path can't silently skip the sync (the status-
+  // ping path originally did, which is exactly the message users quote-reply).
+  // syncReplyMap self-guards (live-local-slug only; skips qualified/daemon
+  // slugs); `federation` is read at call time (assigned later in startup).
+  const recordReplyAnchor = (messageId, slug) => {
+    replyTracker.record(messageId, slug);
+    federation?.syncReplyMap?.(messageId, slug);
+  };
+
   // Auth token: random 32-byte hex written 0600 to the state dir. Spokes
   // read it from the same path. Without this, any local user/process could
   // /register an arbitrary slug and drain another session's Telegram replies.
@@ -286,11 +300,7 @@ async function main() {
       botToken, chatId, text: toSend, forumTopicId: topicForSlug(slug), replyToMessageId,
     });
     if (result?.message_id) {
-      replyTracker.record(result.message_id, slug);
-      // Gossip this anchor to peers so a quote-reply landing on whichever host
-      // owns the bot can resolve it back to this session (#38 Fornax-flip). No-op
-      // when federation is off or `slug` isn't a live local session.
-      federation?.syncReplyMap?.(result.message_id, slug);
+      recordReplyAnchor(result.message_id, slug);
       if (stashOriginal) oversizeCache.put(result.message_id, slug, stashOriginal);
     }
     recentMessages.push(slug, { kind: 'outbound', text: toSend });
@@ -346,8 +356,7 @@ async function main() {
           replyToMessageId: prevId,
         });
         if (result?.message_id) {
-          replyTracker.record(result.message_id, entry.slug);
-          federation?.syncReplyMap?.(result.message_id, entry.slug);
+          recordReplyAnchor(result.message_id, entry.slug);
           prevId = result.message_id;
         }
       } catch (err) {
@@ -548,7 +557,7 @@ async function main() {
     // For single-slug /status, record the digest message_id against the
     // slug so a follow-up quote-reply lands on the same session.
     // All-slugs digests pass slug=null inside the handler and skip recording.
-    recordReply: (msgId, slug) => replyTracker.record(msgId, slug),
+    recordReply: (msgId, slug) => recordReplyAnchor(msgId, slug),
     log,
   });
 
@@ -847,7 +856,7 @@ async function main() {
           parseMode: 'HTML',
         });
         if (result?.message_id) {
-          replyTracker.record(result.message_id, slug);
+          recordReplyAnchor(result.message_id, slug);
           if (tokenForThis) approvalTokens.setMessageId(tokenForThis, result.message_id);
         }
         recentMessages.push(slug, { kind: 'event', text });
@@ -868,7 +877,7 @@ async function main() {
     responseCap: config.responseCap,
     summarizeBatchFn: maybeSummarizeBatch,
     send: ({ slug, text }) => sendMessage({ botToken, chatId, text, forumTopicId: topicForSlug(slug), parseMode: 'HTML' }),
-    recordReply: (msgId, slug) => replyTracker.record(msgId, slug),
+    recordReply: (msgId, slug) => recordReplyAnchor(msgId, slug),
     recordRecent: (slug, entry) => recentMessages.push(slug, entry),
     log,
   });

@@ -185,3 +185,22 @@ test('composeDigest: escapes summary HTML', () => {
   });
   assert.match(text, /fixed bug in &lt;Header&gt; &amp; &lt;Footer&gt;/);
 });
+
+test('a verbose ready-ping preserves a >2500-char response and stays under 4096 (#48)', () => {
+  // Regression for #48: agent turns over the old 2500 cap were clipped in the
+  // ready ping. The response is rendered first, so it must survive intact, and
+  // the whole message must stay under Telegram's 4096 cap (no byte-slice that
+  // could cut mid-HTML-entity and get the ping rejected).
+  const response = 'R'.repeat(3000); // > old 2500 cap
+  const prompt = 'P'.repeat(600);
+  const text = compose({
+    slug: 'computer-use',
+    status: 'ready',
+    event: 'Stop',
+    statusFile: { last_response: response, last_prompt: prompt },
+    promptCap: 600,
+    responseCap: 3200,
+  });
+  assert.ok(text.includes(response), 'the full 3000-char response is preserved (not clipped at 2500)');
+  assert.ok(text.length <= 4096, `composed length ${text.length} must stay under Telegram's 4096 cap`);
+});

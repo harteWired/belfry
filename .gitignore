@@ -8,3 +8,6 @@ state/
 .claude/
 nohup.out
 docs/sessions/.resume-log
+
+# compiled C relay — built from bin/belfry-relay.c by belfry-launch.sh (do not commit the binary)
+bin/belfry-relay

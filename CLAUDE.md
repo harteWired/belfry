@@ -50,7 +50,9 @@ Two processes:
 
 ```
 bin/belfry.js              — daemon entry point + daemon loop
-bin/belfry-mcp.js          — per-session MCP plugin (registers, recv-loop, inject, reply tool)
+bin/belfry-mcp.js          — per-session MCP plugin (registers, recv-loop, inject, reply tool); kept as a fallback foothold + the source of the broker's per-connection logic
+bin/belfry-broker.js       — shared MCP broker: ONE process serving every session's channel role (per-connection sessions over a unix socket), replacing N per-session belfry-mcp.js Node spokes. Relays connect via a handshake; reconnect-safe (stable session_id → daemon preserves the queue across a broker bounce)
+bin/belfry-relay.c / .py   — thin per-session stdio↔broker relay (the foothold Claude spawns). C compiles to a ~1MB binary (live default via belfry-mcp.json); python (~8MB) is the fallback. Both: handshake, byte-transparent pipe, auto-reconnect on broker drop
 bin/belfry-hook.js         — Claude Code hook that writes the /tmp/claude-dashboard/ convention
 bin/belfry-install-hook.js — adds belfry-hook to .claude/settings.json with writer detection
 bin/belfry-broadcast.js    — local CLI: fan one message out to every session (POST /broadcast)

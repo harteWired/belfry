@@ -12,6 +12,7 @@ import { Digest } from '../lib/digest.js';
 import { compose } from '../lib/composer.js';
 import {
   sendMessage as rawSendMessage,
+  sendDocument as rawSendDocument,
   setMessageReaction as rawSetMessageReaction,
   editMessageText as rawEditMessageText,
 } from '../lib/telegram.js';
@@ -134,6 +135,11 @@ async function main() {
   });
   log(`send pacing: ${sendQueue.minIntervalMs}ms base interval, 429 retry_after honoured`);
   const sendMessage = (args) => sendQueue.enqueue(() => rawSendMessage(args), { label: 'sendMessage' });
+  const sendDocument = (args) => sendQueue.enqueue(() => rawSendDocument(args), { label: 'sendDocument' });
+  // Outbound file limits (#files): Telegram caps documents at 50MB / photos at
+  // 10MB; we cap at 50MB and at a sane count per reply to bound a runaway model.
+  const MAX_FILE_BYTES = 50 * 1024 * 1024;
+  const MAX_FILES_PER_REPLY = 10;
   const setMessageReaction = (args) => sendQueue.enqueue(() => rawSetMessageReaction(args), { label: 'setMessageReaction' });
   const editMessageText = (args) => sendQueue.enqueue(() => rawEditMessageText(args), { label: 'editMessageText' });
 
@@ -271,7 +277,7 @@ async function main() {
   // now?" — slug-tagged for session replies, "daemon:" for daemon-level
   // sends (brain, /status, command handlers).
   const replyHeader = (slug) => `${slug || 'daemon'}:\n\n`;
-  const sendOutbound = async ({ slug, text, replyToMessageId }) => {
+  const sendOutbound = async ({ slug, text = '', replyToMessageId, files }) => {
     // Arm the echo muzzle SYNCHRONOUSLY before any await. The sync prefix
     // of an async function runs in the calling tick, so a same-tick
     // `onUpdate` → `shouldSkip` (the auto-reply path) sees the muzzle
@@ -280,32 +286,62 @@ async function main() {
     // Stop-hook-derived `last_response` — time proximity is the right
     // invariant. See lib/ping-dedup.js.
     pingDedup.muzzleNext(slug);
-    const header = replyHeader(slug);
-    const packTrigger = TELEGRAM_TEXT_CAP - FULL_FOOTER.length - header.length;
-    let toSend = header + text;
-    let stashOriginal = null;
-    let packMode = null;
-    if (text.length > packTrigger) {
-      const packed = await packForTelegram(text, {
-        brain,
-        limit: TELEGRAM_TEXT_CAP,
-        reservedFooterChars: FULL_FOOTER.length + header.length,
-        log,
+    const fileList = Array.isArray(files) ? files.filter((f) => typeof f === 'string' && f) : [];
+    let firstMessageId = null;
+
+    // 1) Text (if any) — the existing packed path. Skipped for a files-only reply.
+    if (typeof text === 'string' && text.length > 0) {
+      const header = replyHeader(slug);
+      const packTrigger = TELEGRAM_TEXT_CAP - FULL_FOOTER.length - header.length;
+      let toSend = header + text;
+      let stashOriginal = null;
+      let packMode = null;
+      if (text.length > packTrigger) {
+        const packed = await packForTelegram(text, {
+          brain,
+          limit: TELEGRAM_TEXT_CAP,
+          reservedFooterChars: FULL_FOOTER.length + header.length,
+          log,
+        });
+        toSend = header + packed.text + FULL_FOOTER;
+        stashOriginal = text;
+        packMode = packed.mode;
+      }
+      const result = await sendMessage({
+        botToken, chatId, text: toSend, forumTopicId: topicForSlug(slug), replyToMessageId,
       });
-      toSend = header + packed.text + FULL_FOOTER;
-      stashOriginal = text;
-      packMode = packed.mode;
+      if (result?.message_id) {
+        firstMessageId = result.message_id;
+        recordReplyAnchor(result.message_id, slug);
+        if (stashOriginal) oversizeCache.put(result.message_id, slug, stashOriginal);
+      }
+      recentMessages.push(slug, { kind: 'outbound', text: toSend });
+      const packTag = packMode ? `, packed=${packMode} (orig ${text.length}→${toSend.length})` : '';
+      log(`sent ${slug}: outbound reply (${toSend.length} chars, msg ${result?.message_id}${replyToMessageId ? `, in reply to ${replyToMessageId}` : ''}${packTag})`);
     }
-    const result = await sendMessage({
-      botToken, chatId, text: toSend, forumTopicId: topicForSlug(slug), replyToMessageId,
-    });
-    if (result?.message_id) {
-      recordReplyAnchor(result.message_id, slug);
-      if (stashOriginal) oversizeCache.put(result.message_id, slug, stashOriginal);
+
+    // 2) Files (if any) — each as its own message threaded to the same
+    // originating message. Best-effort per file: a missing/oversized/failed
+    // file is logged and skipped, never aborting the rest of the reply.
+    for (const fp of fileList.slice(0, MAX_FILES_PER_REPLY)) {
+      try {
+        const st = statSync(fp);
+        if (!st.isFile()) { log(`file skip (not a regular file): ${fp}`); continue; }
+        if (st.size > MAX_FILE_BYTES) { log(`file skip (>${MAX_FILE_BYTES}B): ${fp}`); continue; }
+        const fres = await sendDocument({
+          botToken, chatId, filePath: fp, forumTopicId: topicForSlug(slug), replyToMessageId,
+        });
+        if (fres?.message_id) {
+          if (firstMessageId === null) firstMessageId = fres.message_id;
+          recordReplyAnchor(fres.message_id, slug);
+        }
+        log(`sent ${slug}: file ${fp.split('/').pop()} (msg ${fres?.message_id})`);
+      } catch (err) {
+        log(`file send failed (${fp}): ${err.message}`);
+      }
     }
-    recentMessages.push(slug, { kind: 'outbound', text: toSend });
-    const packTag = packMode ? `, packed=${packMode} (orig ${text.length}→${toSend.length})` : '';
-    log(`sent ${slug}: outbound reply (${toSend.length} chars, msg ${result?.message_id}${replyToMessageId ? `, in reply to ${replyToMessageId}` : ''}${packTag})`);
+
+    const result = { message_id: firstMessageId };
     // Swap the originating inbound's routing-status reaction to the 'replied'
     // emoji (🫡 by default) now that the session has answered — the 👀 ack
     // becomes a visible "done" marker. Only when reactions are on, a 'replied'
@@ -317,7 +353,7 @@ async function main() {
     // belfry-mcp never does; if one did, the swap would land on whatever it
     // named.) Fire-and-forget: a failed swap must never affect the reply that
     // already went out.
-    if (reactEmoji?.replied && typeof replyToMessageId === 'number' && replyToMessageId > 0) {
+    if (firstMessageId !== null && reactEmoji?.replied && typeof replyToMessageId === 'number' && replyToMessageId > 0) {
       setMessageReaction({ botToken, chatId, messageId: replyToMessageId, emoji: reactEmoji.replied })
         .catch((err) => log(`reaction swap failed (msg ${replyToMessageId}): ${err.message}`));
     }
@@ -755,16 +791,16 @@ async function main() {
   // falls through to the safe local path.
   if (botToken && chatId) {
     const localChatId = Number(chatId);
-    registry.setRemoteReplyHandler(async ({ slug, text, remote }) => {
+    registry.setRemoteReplyHandler(async ({ slug, text, remote, files }) => {
       // The originatingMessageId is a message id in the OWNER's chat, quote-
       // replied here in THIS host's chat — correct only under the single-chat
       // fleet invariant (one bot, one chat). Guard it so a divergent-chat
       // misconfig fails loud (drops the quote) instead of silently misthreading.
       if (Number.isInteger(remote?.chatId) && remote.chatId !== localChatId) {
         log(`remote return-leg: forwarded chatId ${remote.chatId} != local ${localChatId} — sending unthreaded (fleet must share one chat)`);
-        return sendOutbound({ slug, text, replyToMessageId: null });
+        return sendOutbound({ slug, text, replyToMessageId: null, files });
       }
-      return sendOutbound({ slug, text, replyToMessageId: remote.originatingMessageId });
+      return sendOutbound({ slug, text, replyToMessageId: remote.originatingMessageId, files });
     });
   }
 

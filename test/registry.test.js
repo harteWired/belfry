@@ -194,6 +194,46 @@ test('/send proxies to onSend callback and clears the pending marker', async () 
   await reg.stop();
 });
 
+test('/send accepts files (with or without text) and threads them to onSend (#outbound files)', async () => {
+  const calls = [];
+  const reg = new Registry({
+    port: 0,
+    recvTimeoutMs: 200,
+    onSend: async (a) => { calls.push(a); return { message_id: 7 }; },
+  });
+  await reg.start();
+  const url = `http://127.0.0.1:${reg.port}`;
+  await fetch(`${url}/register`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instance_id: 'fx', slug: 'file-slug', cwd: '/x' }),
+  });
+  const send = (payload) => fetch(`${url}/send`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instance_id: 'fx', ...payload }),
+  });
+
+  // files-only (no text) is accepted and the files reach onSend
+  let res = await send({ files: ['/tmp/a.png'] });
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls.at(-1).files, ['/tmp/a.png']);
+
+  // text + files: both threaded
+  res = await send({ text: 'cap', files: ['/tmp/b.txt'] });
+  assert.equal(res.status, 200);
+  assert.equal(calls.at(-1).text, 'cap');
+  assert.deepEqual(calls.at(-1).files, ['/tmp/b.txt']);
+
+  // neither text nor files -> 400 bad request
+  res = await send({});
+  assert.equal(res.status, 400);
+
+  // a non-string file entry invalidates the files array -> 400 (no text either)
+  res = await send({ files: [123] });
+  assert.equal(res.status, 400);
+
+  await reg.stop();
+});
+
 test('/send returns 404 for unknown instance', async () => {
   const reg = new Registry({ port: 0, recvTimeoutMs: 200, onSend: async () => ({ message_id: 1 }) });
   await reg.start();

@@ -67,11 +67,18 @@ const TOOLS = [
   {
     name: 'reply',
     description:
-      'Send a message back to the originating Telegram chat (the human) for this session. Call this ONLY on a turn whose inbound was a belfry <channel source="belfry"> message AND was NOT tagged origin="agent" — for terminal-origin turns (no tag) answer in the terminal, and for peer-agent messages (origin="agent") answer with send_to, never reply. Always also render the full reply text as terminal output; the terminal must never carry less than what goes to Telegram. Threads as a quote-reply to the originating message automatically.',
+      'Send a message and/or files back to the originating Telegram chat (the human) for this session. Call this ONLY on a turn whose inbound was a belfry <channel source="belfry"> message AND was NOT tagged origin="agent" — for terminal-origin turns (no tag) answer in the terminal, and for peer-agent messages (origin="agent") answer with send_to, never reply. Always also render the full reply text as terminal output; the terminal must never carry less than what goes to Telegram. Threads as a quote-reply to the originating message automatically. Provide text, files, or both.',
     inputSchema: {
       type: 'object',
-      properties: { text: { type: 'string', description: 'Message text to send to Telegram. ≤ 4096 chars.' } },
-      required: ['text'],
+      properties: {
+        text: { type: 'string', description: 'Message text to send to Telegram. ≤ 4096 chars. Optional if files are given.' },
+        files: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Absolute paths to local files to send to Telegram. Image types (jpg/png/gif/webp) render inline as photos; everything else sends as a document. Up to 10, ≤50MB each. Optional.',
+        },
+      },
+      required: [],
       additionalProperties: false,
     },
   },
@@ -215,11 +222,15 @@ class Session {
     if (name === 'send_to') return this.handleSendTo(msg, args);
     if (name !== 'reply') { this.respondError(msg.id, -32602, `unknown tool: ${name}`); return; }
     const text = typeof args.text === 'string' ? args.text : '';
-    if (text.length === 0) { this.respondError(msg.id, -32602, 'reply: text must be a non-empty string'); return; }
+    const files = Array.isArray(args.files) ? args.files.filter((f) => typeof f === 'string' && f) : [];
+    if (text.length === 0 && files.length === 0) {
+      this.respondError(msg.id, -32602, 'reply: provide text and/or files (both empty)');
+      return;
+    }
     const res = await fetch(`${DAEMON_BASE}/send`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ instance_id: this.instanceId, text }),
+      body: JSON.stringify({ instance_id: this.instanceId, text, files: files.length ? files : undefined }),
     });
     if (!res.ok) {
       const errBody = await res.text().catch(() => '');
@@ -227,10 +238,11 @@ class Session {
       return;
     }
     const body = await res.json().catch(() => ({}));
+    const fileNote = files.length ? ` + ${files.length} file(s)` : '';
     const summary = body?.message_id
-      ? `Sent to Telegram (message ${body.message_id}, ${text.length} chars).`
-      : `Sent to Telegram (${text.length} chars).`;
-    this.respond(msg.id, { content: [{ type: 'text', text: `${summary}\n\nSent text:\n${text}` }] });
+      ? `Sent to Telegram (message ${body.message_id}, ${text.length} chars${fileNote}).`
+      : `Sent to Telegram (${text.length} chars${fileNote}).`;
+    this.respond(msg.id, { content: [{ type: 'text', text: `${summary}${text ? `\n\nSent text:\n${text}` : ''}` }] });
   }
 
   async handleSendTo(msg, args) {

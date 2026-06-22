@@ -1,6 +1,48 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { setMessageReaction } from '../lib/telegram.js';
+import { setMessageReaction, sendDocument } from '../lib/telegram.js';
+
+// --- sendDocument (#outbound files) ---
+function fileFetch(captured, { ok = true, status = 200, result = { ok: true, result: { message_id: 1 } } } = {}) {
+  return async (url, opts) => {
+    captured.push({ url, form: opts.body });
+    return { ok, status, json: async () => result, text: async () => JSON.stringify(result) };
+  };
+}
+const fakeFs = (content = 'bytes') => ({ readFileSync: () => Buffer.from(content) });
+
+test('sendDocument uses sendPhoto for image extensions (case-insensitive)', async () => {
+  const cap = [];
+  await sendDocument({ botToken: 'TOK', chatId: 5, filePath: '/x/pic.PNG', caption: 'hi', fetchImpl: fileFetch(cap), fs: fakeFs() });
+  assert.match(cap[0].url, /\/botTOK\/sendPhoto$/);
+  assert.ok(cap[0].form.get('photo'));
+  assert.equal(cap[0].form.get('chat_id'), '5');
+  assert.equal(cap[0].form.get('caption'), 'hi');
+});
+
+test('sendDocument uses sendDocument for non-image, and forceDocument overrides an image', async () => {
+  const cap = [];
+  await sendDocument({ botToken: 'T', chatId: 1, filePath: '/x/report.pdf', fetchImpl: fileFetch(cap), fs: fakeFs() });
+  assert.match(cap[0].url, /\/sendDocument$/);
+  assert.ok(cap[0].form.get('document'));
+  const cap2 = [];
+  await sendDocument({ botToken: 'T', chatId: 1, filePath: '/x/pic.png', forceDocument: true, fetchImpl: fileFetch(cap2), fs: fakeFs() });
+  assert.match(cap2[0].url, /\/sendDocument$/);
+});
+
+test('sendDocument threads reply_parameters and clamps caption to 1024', async () => {
+  const cap = [];
+  await sendDocument({ botToken: 'T', chatId: 1, filePath: '/x/a.txt', caption: 'x'.repeat(2000), replyToMessageId: 99, fetchImpl: fileFetch(cap), fs: fakeFs() });
+  assert.equal(cap[0].form.get('caption').length, 1024);
+  assert.deepEqual(JSON.parse(cap[0].form.get('reply_parameters')), { message_id: 99, allow_sending_without_reply: true });
+});
+
+test('sendDocument throws on a non-ok Telegram response', async () => {
+  await assert.rejects(
+    () => sendDocument({ botToken: 'T', chatId: 1, filePath: '/x/a.txt', fetchImpl: fileFetch([], { ok: false, status: 400, result: { ok: false } }), fs: fakeFs() }),
+    /sendDocument failed: 400/,
+  );
+});
 
 function fakeFetch(captured, { ok = true, status = 200, result = { ok: true } } = {}) {
   return async (url, opts) => {

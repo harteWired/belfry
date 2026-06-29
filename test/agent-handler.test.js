@@ -85,6 +85,24 @@ test('brain.send throws: replies with the "error" fallback', async () => {
   assert.equal(send.calls[0].replyToMessageId, 9);
 });
 
+test('brain.send throws an auth error: replies with the auth-specific fallback', async () => {
+  const brain = fakeBrain({
+    sendImpl: () => {
+      const err = new Error('brain turn error (HTTP 401) [success]: Failed to authenticate');
+      err.isAuthError = true;
+      err.apiErrorStatus = 401;
+      throw err;
+    },
+  });
+  const send = fakeSender();
+  const h = makeAgentHandler({ brain, send });
+  await h({ text: 'classify me', messageId: 11 });
+  assert.equal(send.calls.length, 1);
+  assert.match(send.calls[0].text, /can't authenticate/);
+  assert.doesNotMatch(send.calls[0].text, /hit an error/);
+  assert.equal(send.calls[0].replyToMessageId, 11);
+});
+
 test('empty text: no-op', async () => {
   const brain = fakeBrain();
   const send = fakeSender();

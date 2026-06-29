@@ -6,9 +6,11 @@
  * binary or a network call.
  *
  * Behavior knobs via env:
- *   STUB_RESPOND_AS=text|error|hang   (default text)
+ *   STUB_RESPOND_AS=text|error|auth|hang   (default text)
  *     text  — emit a {type:result, result:"echo: <content>"} line
  *     error — emit a {type:result, is_error:true} line
+ *     auth  — emit a 401 turn: {subtype:"success", is_error:true,
+ *             api_error_status:401} (mirrors a real expired-credentials turn)
  *     hang  — never respond (tests timeout)
  *   STUB_EXIT_AFTER_N=N               (default infinity)
  *     If set, exit after processing N user messages (tests crash recovery).
@@ -53,6 +55,10 @@ process.stdin.on('data', (chunk) => {
       // never respond
     } else if (RESPOND_AS === 'error') {
       emit({ type: 'result', subtype: 'error', is_error: true, result: '' });
+    } else if (RESPOND_AS === 'auth') {
+      // A real expired-credentials turn: subtype stays "success" but is_error
+      // is true and api_error_status is 401 (the bug that masked the outage).
+      emit({ type: 'result', subtype: 'success', is_error: true, api_error_status: 401, result: 'Failed to authenticate. API Error: 401 Invalid authentication credentials' });
     } else {
       // Default: echo the content with a "echo:" prefix
       emit({ type: 'system', subtype: 'init' }); // realism — claude emits this

@@ -89,6 +89,22 @@ test('send: rejects when brain returns is_error', async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('send: tags 401 turns as auth errors and surfaces the status', async () => {
+  const { sup, dir } = buildSupervisor({ env: { STUB_RESPOND_AS: 'auth' } });
+  sup.start();
+  await new Promise((r) => setTimeout(r, 50));
+  await assert.rejects(sup.send('classify me'), (err) => {
+    assert.match(err.message, /HTTP 401/);
+    assert.match(err.message, /authenticate/i);
+    assert.equal(err.apiErrorStatus, 401);
+    assert.equal(err.isAuthError, true);
+    return true;
+  });
+  assert.equal(sup.lastAuthError?.status, 401);
+  await sup.stop();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('send: times out when brain hangs', async () => {
   const { sup, dir } = buildSupervisor({ env: { STUB_RESPOND_AS: 'hang' }, turnTimeoutMs: 200 });
   sup.start();

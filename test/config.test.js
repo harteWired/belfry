@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-import { loadConfig, isSubscribed, isSummarized, topicFor, topicSlugMap } from '../lib/config.js';
+import { loadConfig, isSubscribed, isSummarized, topicFor, topicSlugMap, meshTelegramMode } from '../lib/config.js';
 
 function tmp(content) {
   const p = path.join(os.tmpdir(), `belfry-test-${Date.now()}-${Math.random().toString(36).slice(2)}.jsonc`);
@@ -125,5 +125,58 @@ test('loadConfig: rejects non-positive / non-numeric topic values', () => {
   assert.equal(cfg.subscriptions.stringTopic.topic, null);
   assert.equal(cfg.subscriptions.zeroTopic.topic, null);
   assert.equal(cfg.subscriptions.negTopic.topic, null);
+  fs.unlinkSync(p);
+});
+
+test('mesh block absent → mesh null and meshTelegramMode returns none (#39)', () => {
+  const p = tmp(`{ "subscriptions": {} }`);
+  const cfg = loadConfig(p);
+  assert.equal(cfg.mesh, null);
+  assert.equal(meshTelegramMode(cfg, 'w/wintermute', 'life-planner'), 'none');
+  fs.unlinkSync(p);
+});
+
+test('mesh block parses default + overrides, dropping invalid modes (#39)', () => {
+  const p = tmp(`{
+    "mesh": {
+      "telegram": "none",
+      "telegramOverrides": {
+        "wintermute": "full",
+        "noisy-agent": "summary"  // not implemented → dropped
+      }
+    }
+  }`);
+  const cfg = loadConfig(p);
+  assert.equal(cfg.mesh.telegram, 'none');
+  assert.deepEqual(cfg.mesh.telegramOverrides, { wintermute: 'full' });
+  fs.unlinkSync(p);
+});
+
+test('meshTelegramMode: bare override key matches host-qualified endpoints, either direction (#39)', () => {
+  const p = tmp(`{ "mesh": { "telegramOverrides": { "wintermute": "full" } } }`);
+  const cfg = loadConfig(p);
+  // Source match, qualified and bare.
+  assert.equal(meshTelegramMode(cfg, 'w/wintermute', 'life-planner'), 'full');
+  assert.equal(meshTelegramMode(cfg, 'wintermute', 'life-planner'), 'full');
+  // Destination match — messages TO the agent surface too.
+  assert.equal(meshTelegramMode(cfg, 'belfry', 'w/wintermute'), 'full');
+  // No endpoint matches → default none.
+  assert.equal(meshTelegramMode(cfg, 'belfry', 'computer-use'), 'none');
+  fs.unlinkSync(p);
+});
+
+test('meshTelegramMode: qualified override key outranks the default but only for that host (#39)', () => {
+  const p = tmp(`{ "mesh": { "telegram": "none", "telegramOverrides": { "w/wintermute": "full" } } }`);
+  const cfg = loadConfig(p);
+  assert.equal(meshTelegramMode(cfg, 'w/wintermute', 'x'), 'full');
+  assert.equal(meshTelegramMode(cfg, 'e/wintermute', 'x'), 'none');
+  fs.unlinkSync(p);
+});
+
+test('meshTelegramMode: override can silence one agent under a full default (#39)', () => {
+  const p = tmp(`{ "mesh": { "telegram": "full", "telegramOverrides": { "chatterbox": "none" } } }`);
+  const cfg = loadConfig(p);
+  assert.equal(meshTelegramMode(cfg, 'chatterbox', 'x'), 'none');
+  assert.equal(meshTelegramMode(cfg, 'quiet-one', 'x'), 'full');
   fs.unlinkSync(p);
 });

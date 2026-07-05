@@ -55,6 +55,24 @@
   "digestIdleMs": 15000,
   "digestWindowMs": 60000,
 
+  // Optional: mesh visibility (#39, scoped). Agent-to-agent messages (send_to,
+  // federation relays, bridge replies) normally stay off Telegram entirely —
+  // a peer message owes the phone nothing. Set an override to "full" to mirror
+  // an agent's mesh traffic to Telegram as it's delivered: any relay whose
+  // source OR destination matches the key is sent as a normal outbound message
+  // (headered with the source slug, "→ <dest>" on the first line). A bare key
+  // like "wintermute" matches that slug on any host (w/wintermute included);
+  // a qualified key like "w/wintermute" matches only that host. "telegram" is
+  // the default for unmatched relays — leave it "none" unless you want ALL
+  // mesh chatter on your phone. Quote-replying a mirrored message routes your
+  // reply back to that agent over the mesh.
+  "mesh": {
+    "telegram": "none",
+    "telegramOverrides": {
+      "wintermute": "full"
+    }
+  },
+
   // Optional: bootstrap nicknames. Same format as the on-disk
   // ~/.local/state/belfry/nicknames.json (managed via /nick, /unnick, /nicks
   // from Telegram). Entries here apply only on first daemon load — the

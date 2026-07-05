@@ -610,3 +610,38 @@ test('a FAILED remote return-leg still clears the marker (no 1h session wedge) (
   assert.equal(reg.getRemoteOwesReply('wsess'), null, 'marker cleared even on failure — no wedge onto the broken path');
   await reg.stop();
 });
+
+test('agent-relay observer fires with from/to/text/delivered on a delivered relay (#39)', async () => {
+  const reg = new Registry({ port: 0, recvTimeoutMs: 200 });
+  await reg.start();
+  const url = `http://127.0.0.1:${reg.port}`;
+  await fetch(`${url}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ instance_id: 'mi', slug: 'wintermute', cwd: '/x' }) });
+  const seen = [];
+  reg.setAgentRelayObserver((args) => seen.push(args));
+  const result = reg.relayAgentMessage('w/wintermute', 'wintermute', 'status update');
+  assert.equal(result.delivered, 1);
+  assert.deepEqual(seen, [{ from: 'w/wintermute', to: 'wintermute', text: 'status update', delivered: 1 }]);
+  await reg.stop();
+});
+
+test('agent-relay observer fires with delivered:0 on a no-live-session drop (#39)', () => {
+  const reg = new Registry({ log: () => {} });
+  const seen = [];
+  reg.setAgentRelayObserver((args) => seen.push(args));
+  reg.relayAgentMessage('w/wintermute', 'ghost', 'anyone there?');
+  assert.deepEqual(seen, [{ from: 'w/wintermute', to: 'ghost', text: 'anyone there?', delivered: 0 }]);
+});
+
+test('a throwing agent-relay observer never breaks the relay (#39)', () => {
+  const logs = [];
+  const reg = new Registry({ log: (m) => logs.push(m) });
+  reg.setAgentRelayObserver(() => { throw new Error('mirror down'); });
+  const result = reg.relayAgentMessage('a', 'b', 'c');
+  assert.equal(result.ok, true);
+  assert.ok(logs.some((l) => l.includes('mirror down')));
+});
+
+test('no agent-relay observer wired → identical behavior (#39)', () => {
+  const reg = new Registry({ log: () => {} });
+  assert.doesNotThrow(() => reg.relayAgentMessage('a', 'b', 'c'));
+});

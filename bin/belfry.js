@@ -5,7 +5,7 @@ import { join, dirname } from 'node:path';
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 
-import { loadConfig, isSubscribed, isSummarized, isDigested, topicFor, topicSlugMap } from '../lib/config.js';
+import { loadConfig, isSubscribed, isSummarized, isDigested, topicFor, topicSlugMap, meshTelegramMode } from '../lib/config.js';
 import { StatusWatcher } from '../lib/watcher.js';
 import { Throttle } from '../lib/throttle.js';
 import { Digest } from '../lib/digest.js';
@@ -822,6 +822,23 @@ async function main() {
       }
       return sendOutbound({ slug, text, replyToMessageId: remote.originatingMessageId, files });
     });
+
+    // Mesh mirror (#39, scoped): surface selected agent-to-agent traffic on
+    // Telegram. Default is 'none' — the mesh stays off the phone — with
+    // per-slug jsonc overrides (mesh.telegramOverrides) for agents the user
+    // wants to see, e.g. wintermute. Fires receiver-side only (see
+    // relayAgentMessage), so a fleet-wide deploy never double-mirrors a
+    // cross-host message. The mirrored send records a reply anchor under the
+    // source slug, so quote-replying a mirror messages that agent back.
+    if (config.mesh) {
+      registry.setAgentRelayObserver(({ from, to, text, delivered }) => {
+        if (meshTelegramMode(config, from, to) !== 'full') return;
+        const note = delivered === 0 ? '\n\n⚠ not delivered (no live session)' : '';
+        sendOutbound({ slug: from, text: `→ ${to}\n\n${text}${note}`, replyToMessageId: null })
+          .catch((err) => log(`mesh mirror ${from}→${to} failed: ${err.message}`));
+      });
+      log('mesh mirror on (telegram default=' + config.mesh.telegram + ', overrides=' + Object.keys(config.mesh.telegramOverrides).length + ')');
+    }
   }
 
   const poller = new Poller({

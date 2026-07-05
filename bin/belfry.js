@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { fileURLToPath } from 'node:url';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { join, dirname } from 'node:path';
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, unlinkSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
@@ -51,6 +51,7 @@ import { wireFederation, DEFAULT_FED_PORT } from '../lib/federation-daemon.js';
 import { TelegramOwner } from '../lib/federation-owner.js';
 import { parseBridges } from '../lib/bridge.js';
 import { SubscriptionsStore } from '../lib/subscriptions-store.js';
+import { makeTap } from '../lib/wintermute-tap.js';
 import { makeWatchHandler } from '../lib/watch-handler.js';
 import { answerCallbackQuery as rawAnswerCallbackQuery } from '../lib/telegram.js';
 
@@ -96,6 +97,21 @@ async function main() {
   const mcpPort = Number(process.env.BELFRY_MCP_PORT || 49876);
   const transcribeKey = (process.env.BELFRY_TRANSCRIBE_KEY ?? '').trim();
   const transcribeProvider = (process.env.BELFRY_TRANSCRIBE_PROVIDER ?? '').trim() || undefined;
+  // Wintermute message-flow tap (#49): metadata-only flow events to the fleet
+  // control plane. Off unless WINTERMUTE_TAP_URL is set; a bad URL disables the
+  // tap loudly rather than crashing the daemon.
+  let tap = null;
+  try {
+    tap = makeTap({
+      url: (process.env.WINTERMUTE_TAP_URL ?? '').trim() || null,
+      token: (process.env.WINTERMUTE_TAP_TOKEN ?? '').trim() || null,
+      host: (process.env.BELFRY_HOST_LETTER ?? '').trim() || hostname().toLowerCase(),
+      log,
+    });
+    if (tap) log(`wintermute-tap: emitting flow events to ${(process.env.WINTERMUTE_TAP_URL ?? '').trim()}`);
+  } catch (err) {
+    log(`wintermute-tap: invalid config (${err.message}) — tap disabled`);
+  }
   // Federation-only mode (#29): this node participates ONLY in the cross-host
   // a2a mesh — it runs the loopback registry + the /fed listener but NEVER polls
   // Telegram. A peer host (e.g. Erebus) that has no Telegram role must not start
@@ -342,6 +358,8 @@ async function main() {
     }
 
     const result = { message_id: firstMessageId };
+    // Message-flow tap (#49): one event per outbound send, metadata only.
+    tap?.('send', { from: slug || 'daemon', chars: typeof text === 'string' ? text.length : 0, files: fileList.length });
     // Swap the originating inbound's routing-status reaction to the 'replied'
     // emoji (🫡 by default) now that the session has answered — the 👀 ack
     // becomes a visible "done" marker. Only when reactions are on, a 'replied'
@@ -408,6 +426,7 @@ async function main() {
   // ping-pong from the daemon side, independent of the models.
   const relayGuard = new AgentRelayGuard();
   const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound, relayGuard });
+  if (tap) registry.setTap(tap);
   await registry.start();
 
   // Broadcast orchestrator (#30). Shared by the Telegram `/all` path (poller)
@@ -530,6 +549,7 @@ async function main() {
         bind: fedBind,
         port: fedPort,
         log,
+        tap,
       });
       federation.startGossip();
       const prio = fedConfig.priority == null ? 'unprioritized' : `priority ${fedConfig.priority}`;

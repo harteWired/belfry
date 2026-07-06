@@ -148,7 +148,7 @@ function handleMessage(msg) {
         {
           name: 'send_to',
           description:
-            'Send a message to ANOTHER local Claude Code session by its slug (agent-to-agent, #36). Use this to coordinate with a peer session — NOT to answer the human. When a channel message arrives tagged origin="agent" from="<slug>", it came from a peer session; reply to it with send_to(slug="<slug>", …), never with the `reply` tool (reply pushes to the human\'s phone). The peer receives your text as an origin="agent" channel message. The daemon rate-limits relays to prevent loops; a 429 means you are sending too fast.',
+            'Send a message to ANOTHER local Claude Code session by its slug (agent-to-agent, #36). Use this to coordinate with a peer session — NOT to answer the human. When a channel message arrives tagged origin="agent" from="<slug>", it came from a peer session; reply to it with send_to(slug="<slug>", …), never with the `reply` tool (reply pushes to the human\'s phone). The peer receives your text as an origin="agent" channel message. The daemon rate-limits relays to prevent loops; a 429 means you are sending too fast. The reserved slug "telegram" (or "<letter>/telegram" for another host\'s bridge) posts the message to the HUMAN\'s Telegram, headered with your slug — the deliberate agent-to-human push path. Use it only for messages the human asked to receive proactively; for answering a human\'s belfry-tagged message, the `reply` tool is still the right call.',
           inputSchema: {
             type: 'object',
             properties: {

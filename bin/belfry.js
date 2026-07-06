@@ -823,6 +823,16 @@ async function main() {
       return sendOutbound({ slug, text, replyToMessageId: remote.originatingMessageId, files });
     });
 
+    // Same-host Telegram bridge (#44 completion): let a LOCAL session (or a
+    // single-host deployment) send_to the bridge slug ("telegram" by default)
+    // to deliberately message the human — the same address a federated peer
+    // already reaches via send_to("<letter>/telegram"). Headered with the
+    // sender's slug and reply-anchored, so a quote-reply routes back to it.
+    registry.setHumanTarget({
+      slug: fedBridgeSlug,
+      deliver: (fromSlug, text) => sendOutbound({ slug: fromSlug, text, replyToMessageId: null }),
+    });
+
     // Mesh mirror (#39, scoped): surface selected agent-to-agent traffic on
     // Telegram. Default is 'none' — the mesh stays off the phone — with
     // per-slug jsonc overrides (mesh.telegramOverrides) for agents the user

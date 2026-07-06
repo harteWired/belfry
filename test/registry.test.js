@@ -645,3 +645,40 @@ test('no agent-relay observer wired → identical behavior (#39)', () => {
   const reg = new Registry({ log: () => {} });
   assert.doesNotThrow(() => reg.relayAgentMessage('a', 'b', 'c'));
 });
+
+test('same-host telegram-bridge target: relay to the bridge slug posts to the human, no session needed (#44)', async () => {
+  const reg = new Registry({ log: () => {} });
+  const sends = [];
+  reg.setHumanTarget({ slug: 'telegram', deliver: async (from, text) => { sends.push({ from, text }); } });
+  const result = reg.relayAgentMessage('w/wintermute', 'telegram', 'heads up, Matt');
+  assert.deepEqual(result, { ok: true, delivered: 1 });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(sends, [{ from: 'w/wintermute', text: 'heads up, Matt' }]);
+});
+
+test('telegram-bridge target: a failed send is logged, never thrown into the relay (#44)', async () => {
+  const logs = [];
+  const reg = new Registry({ log: (m) => logs.push(m) });
+  reg.setHumanTarget({ slug: 'telegram', deliver: async () => { throw new Error('telegram 500'); } });
+  assert.doesNotThrow(() => reg.relayAgentMessage('a', 'telegram', 'x'));
+  await new Promise((r) => setTimeout(r, 5));
+  assert.ok(logs.some((l) => l.includes('telegram 500')));
+});
+
+test('telegram-bridge target: relay guard still applies before the bridge (#44)', () => {
+  const sends = [];
+  const reg = new Registry({
+    log: () => {},
+    relayGuard: { check: () => ({ ok: false, reason: 'rate' }) },
+  });
+  reg.setHumanTarget({ slug: 'telegram', deliver: async (from, text) => { sends.push(text); } });
+  const result = reg.relayAgentMessage('a', 'telegram', 'flood');
+  assert.equal(result.ok, false);
+  assert.equal(sends.length, 0);
+});
+
+test('no humanTarget wired → the bridge slug behaves like any offline session (#44)', () => {
+  const reg = new Registry({ log: () => {} });
+  const result = reg.relayAgentMessage('a', 'telegram', 'x');
+  assert.deepEqual(result, { ok: true, delivered: 0 });
+});

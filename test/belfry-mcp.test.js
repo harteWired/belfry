@@ -162,7 +162,9 @@ test('plugin tools/list advertises the reply and send_to tools', async () => {
   const resp = await p.waitFor((m) => m.id === 2);
   const byName = Object.fromEntries(resp.result.tools.map((t) => [t.name, t]));
   assert.deepEqual(Object.keys(byName).sort(), ['reply', 'send_to']);
-  assert.deepEqual(byName.reply.inputSchema.required, ['text']);
+  // Outbound files: a reply may be text, files, or both — nothing is required.
+  assert.deepEqual(byName.reply.inputSchema.required, []);
+  assert.ok(byName.reply.inputSchema.properties.files, 'reply advertises the files param');
   assert.deepEqual(byName.send_to.inputSchema.required, ['slug', 'text']);
   await p.stop();
 });

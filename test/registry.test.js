@@ -682,3 +682,19 @@ test('no humanTarget wired → the bridge slug behaves like any offline session 
   const result = reg.relayAgentMessage('a', 'telegram', 'x');
   assert.deepEqual(result, { ok: true, delivered: 0 });
 });
+
+test('send-to a self-qualified local target delivers under the bare slug (router localSlug)', async () => {
+  const reg = new Registry({ port: 0, recvTimeoutMs: 200 });
+  // Router resolves "j/wsess" to local and hands back the bare slug.
+  reg.federationRouter = async (from, target) =>
+    target === 'j/wsess' ? { handled: false, localSlug: 'wsess' } : { handled: false };
+  await reg.start();
+  const url = `http://127.0.0.1:${reg.port}`;
+  const hdrs = { 'content-type': 'application/json' };
+  await fetch(`${url}/register`, { method: 'POST', headers: hdrs, body: JSON.stringify({ instance_id: 'qi', slug: 'wsess', cwd: '/x' }) });
+  const res = await fetch(`${url}/send-to`, { method: 'POST', headers: hdrs, body: JSON.stringify({ instance_id: 'qi', to_slug: 'j/wsess', text: 'hi self' }) });
+  const body = await res.json();
+  assert.equal(body.ok, true);
+  assert.equal(body.delivered, 1, 'delivered to the live bare-slug session, not dropped as j/wsess');
+  await reg.stop();
+});

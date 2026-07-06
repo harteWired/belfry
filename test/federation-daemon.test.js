@@ -131,6 +131,13 @@ test('qualified target to a peer with no such live session → delivered:0 (not 
 test('local target falls through to local delivery (handled:false)', async () => {
   const r = await fedJ.relayRemote('peer', 'jinn-local', 'stay local');
   assert.equal(r.handled, false, 'a slug we own is the local relay path, not a mesh forward');
+  assert.equal(r.localSlug, 'jinn-local');
+});
+
+test('SELF-qualified target falls through with the BARE slug (j/x on host j)', async () => {
+  const r = await fedJ.relayRemote('peer', 'j/jinn-local', 'stay local, qualified');
+  assert.equal(r.handled, false);
+  assert.equal(r.localSlug, 'jinn-local', 'caller must deliver under the bare slug the local index knows');
 });
 
 test('unknown bare slug falls through to local (same offline signal)', async () => {

@@ -442,3 +442,84 @@ test('reply-map sync feeds a real ReplyTracker so the owner resolves a remote qu
     await Promise.all([rX.stop(), rY.stop()]);
   }
 });
+
+test('/fed/broadcast: allowlisted mesh agent triggers the local fan-out (wintermute-only policy)', async () => {
+  const reg = new Registry({ port: 0, authToken: null });
+  await reg.start();
+  fakeSession(reg, 'alpha', 'bc-a');
+  const calls = [];
+  const fed = await wireFederation({
+    registry: reg,
+    port: await freePort(),
+    fedConfig: {
+      enabled: true, hostLetter: 'j', hostName: 'Jinn', token: TOKEN,
+      peers: [{ letter: 'w', name: 'Wintermute', addr: 'http://127.0.0.1:1' }],
+      broadcastHosts: ['w'],
+    },
+    onFedBroadcast: async ({ text, targetSlugs, from }) => {
+      calls.push({ text, targetSlugs, from });
+      return { count: 1, slugs: ['alpha'] };
+    },
+  });
+  const res = await fetch(`http://127.0.0.1:${fed.port}/fed/broadcast`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({ v: 1, kind: 'broadcast', from: { host: 'w', slug: 'wintermute' }, text: 'fleet: report status', ts: 1 }),
+  });
+  const body = await res.json();
+  assert.equal(res.status, 200);
+  assert.equal(body.accepted, true);
+  assert.equal(body.delivered, 1);
+  assert.deepEqual(calls, [{ text: 'fleet: report status', targetSlugs: null, from: 'w/wintermute' }]);
+  await fed.stop();
+  await reg.stop();
+});
+
+test('/fed/broadcast: a host NOT in broadcastHosts is refused even with a valid mesh token', async () => {
+  const reg = new Registry({ port: 0, authToken: null });
+  await reg.start();
+  let called = false;
+  const fed = await wireFederation({
+    registry: reg,
+    port: await freePort(),
+    fedConfig: {
+      enabled: true, hostLetter: 'j', hostName: 'Jinn', token: TOKEN,
+      peers: [{ letter: 'e', name: 'Erebus', addr: 'http://127.0.0.1:1' }],
+      broadcastHosts: ['w'], // e is a fleet member, but not broadcast-authorized
+    },
+    onFedBroadcast: async () => { called = true; return { count: 0, slugs: [] }; },
+  });
+  const res = await fetch(`http://127.0.0.1:${fed.port}/fed/broadcast`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({ v: 1, kind: 'broadcast', from: { host: 'e', slug: 'rogue-script' }, text: 'spam', ts: 1 }),
+  });
+  const body = await res.json();
+  assert.equal(body.accepted, false);
+  assert.match(body.reason, /not broadcast-authorized/);
+  assert.equal(called, false, 'the daemon broadcast orchestrator must never run for an unauthorized host');
+  await fed.stop();
+  await reg.stop();
+});
+
+test('/fed/broadcast: default (no broadcastHosts) refuses everyone', async () => {
+  const reg = new Registry({ port: 0, authToken: null });
+  await reg.start();
+  const fed = await wireFederation({
+    registry: reg,
+    port: await freePort(),
+    fedConfig: {
+      enabled: true, hostLetter: 'j', hostName: 'Jinn', token: TOKEN,
+      peers: [{ letter: 'w', name: 'Wintermute', addr: 'http://127.0.0.1:1' }],
+    },
+    onFedBroadcast: async () => ({ count: 0, slugs: [] }),
+  });
+  const res = await fetch(`http://127.0.0.1:${fed.port}/fed/broadcast`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({ v: 1, kind: 'broadcast', from: { host: 'w', slug: 'wintermute' }, text: 'x', ts: 1 }),
+  });
+  assert.equal((await res.json()).accepted, false);
+  await fed.stop();
+  await reg.stop();
+});

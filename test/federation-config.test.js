@@ -122,3 +122,17 @@ test('rejects a malformed compact peer spec', () => {
     /malformed peer spec/,
   );
 });
+
+test('broadcastHosts: parses env letters, dedupes, defaults empty', () => {
+  const base = { BELFRY_HOST_LETTER: 'j', BELFRY_FED_PEERS: 'w,Wintermute,http://x:1' };
+  assert.deepEqual(parseFederationConfig({ env: base }).broadcastHosts, []);
+  assert.deepEqual(parseFederationConfig({ env: { ...base, BELFRY_FED_BROADCAST_HOSTS: 'w' } }).broadcastHosts, ['w']);
+  assert.deepEqual(parseFederationConfig({ env: { ...base, BELFRY_FED_BROADCAST_HOSTS: 'w, w e' } }).broadcastHosts, ['w', 'e']);
+  assert.throws(() => parseFederationConfig({ env: { ...base, BELFRY_FED_BROADCAST_HOSTS: 'wx' } }), /broadcastHosts/);
+});
+
+test('broadcastHosts: jsonc block form, env wins', () => {
+  const file = { hostLetter: 'j', peers: [{ letter: 'w', addr: 'http://x:1' }], broadcastHosts: ['w'] };
+  assert.deepEqual(parseFederationConfig({ env: {}, file }).broadcastHosts, ['w']);
+  assert.deepEqual(parseFederationConfig({ env: { BELFRY_FED_BROADCAST_HOSTS: '' }, file }).broadcastHosts, []);
+});

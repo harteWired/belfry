@@ -116,3 +116,20 @@ test('parseEnvelope rejects a replymap with a non-integer messageId on the wire 
   const r = parseEnvelope({ v: ENVELOPE_VERSION, kind: 'replymap', from: { host: 'j' }, messageId: 'x', slug: 'api', ts: 1 });
   assert.equal(r.ok, false);
 });
+
+test('broadcast envelope: builds with from identity + optional filters', () => {
+  const env = buildEnvelope({ kind: 'broadcast', from: { host: 'w', slug: 'wintermute' }, text: 'fleet: status', targetSlugs: ['alpha'], ts: 5 });
+  assert.deepEqual(env, { v: 1, kind: 'broadcast', from: { host: 'w', slug: 'wintermute' }, text: 'fleet: status', targetSlugs: ['alpha'], ts: 5 });
+  // Round-trips through parseEnvelope with filters intact.
+  const parsed = parseEnvelope(JSON.stringify(env));
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(parsed.envelope.targetSlugs, ['alpha']);
+});
+
+test('broadcast envelope: rejects missing text, bad from, malformed filters', () => {
+  assert.throws(() => buildEnvelope({ kind: 'broadcast', from: { host: 'w', slug: 'x' } }), /text/);
+  assert.throws(() => buildEnvelope({ kind: 'broadcast', from: { host: 'ww', slug: 'x' }, text: 'hi' }), /from/);
+  assert.throws(() => buildEnvelope({ kind: 'broadcast', from: { host: 'w', slug: 'x' }, text: 'hi', targetSlugs: [42] }), /targetSlugs/);
+  const parsed = parseEnvelope({ v: 1, kind: 'broadcast', from: { host: 'w' }, text: 'hi', ts: 1 });
+  assert.equal(parsed.ok, false);
+});

@@ -725,3 +725,17 @@ test('matchBroadcast respects acceptsBroadcast:false', async () => {
   assert.equal(reg.matchBroadcast(), 0);
   await reg.stop();
 });
+
+test('POST /broadcast is refused when allowLocalBroadcast is false (wintermute-only policy)', async () => {
+  const calls = [];
+  const reg = new Registry({ port: 0, recvTimeoutMs: 200, allowLocalBroadcast: false, onBroadcast: async (a) => { calls.push(a); return { count: 0, slugs: [] }; } });
+  await reg.start();
+  const res = await fetch(`http://127.0.0.1:${reg.port}/broadcast`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: 'local script spam' }),
+  });
+  assert.equal(res.status, 403);
+  assert.match((await res.json()).error, /restricted to authorized mesh agents/);
+  assert.equal(calls.length, 0, 'orchestrator never runs');
+  await reg.stop();
+});

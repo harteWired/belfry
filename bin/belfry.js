@@ -425,7 +425,12 @@ async function main() {
   // Agent-to-agent relay flood/loop guard (#36): bounds runaway session↔session
   // ping-pong from the daemon side, independent of the models.
   const relayGuard = new AgentRelayGuard();
-  const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound, relayGuard });
+  // Local /broadcast policy (2026-07-08): closed unless explicitly reopened.
+  // Broadcast is a Wintermute-only capability on the mesh (/fed/broadcast +
+  // broadcastHosts allowlist); the human's /all is unaffected (chat-ID gated).
+  const allowLocalBroadcast = /^(1|true|yes|on)$/i.test((process.env.BELFRY_BROADCAST_LOCAL ?? '').trim());
+  if (allowLocalBroadcast) log('local /broadcast route ENABLED (BELFRY_BROADCAST_LOCAL) — the belfry-broadcast CLI works on this host');
+  const registry = new Registry({ port: mcpPort, log, authToken, onSend: sendOutbound, relayGuard, allowLocalBroadcast });
   if (tap) registry.setTap(tap);
   await registry.start();
 
@@ -560,6 +565,12 @@ async function main() {
         // anchor host-qualified, so a quote-reply to a remote session's ping
         // that lands on this (bot-owning) host resolves and forwards back.
         recordReplyMap: (msgId, qualifiedSlug) => replyTracker.record(msgId, qualifiedSlug),
+        // Fleet fan-out from an authorized mesh agent (wintermute-only policy).
+        // Allowlist gate runs in the federation daemon; by the time this fires
+        // the requester is authorized. source carries the requesting identity
+        // so the log + confirmation say who broadcast.
+        onFedBroadcast: ({ text, targetSlugs, excludeSlugs, from }) =>
+          onBroadcast({ text, targetSlugs, excludeSlugs, messageId: null, source: `fed:${from}` }),
         bind: fedBind,
         port: fedPort,
         log,

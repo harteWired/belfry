@@ -698,3 +698,30 @@ test('send-to a self-qualified local target delivers under the bare slug (router
   assert.equal(body.delivered, 1, 'delivered to the live bare-slug session, not dropped as j/wsess');
   await reg.stop();
 });
+
+test('matchBroadcast counts would-be recipients with broadcast filters, without delivering', async () => {
+  const reg = new Registry({ port: 0, recvTimeoutMs: 200 });
+  await reg.start();
+  const url = `http://127.0.0.1:${reg.port}`;
+  const hdrs = { 'content-type': 'application/json' };
+  await fetch(`${url}/register`, { method: 'POST', headers: hdrs, body: JSON.stringify({ instance_id: 'm1', slug: 'alpha', cwd: '/x' }) });
+  await fetch(`${url}/register`, { method: 'POST', headers: hdrs, body: JSON.stringify({ instance_id: 'm2', slug: 'beta', cwd: '/x' }) });
+  assert.equal(reg.matchBroadcast(), 2);
+  assert.equal(reg.matchBroadcast({ targetSlugs: ['alpha'] }), 1);
+  assert.equal(reg.matchBroadcast({ targetSlugs: ['computer-use'] }), 0, 'a slug living on another host matches nothing here');
+  assert.equal(reg.matchBroadcast({ excludeSlugs: ['alpha', 'beta'] }), 0);
+  // Counting delivered nothing: both instances still have empty queues.
+  assert.equal(reg.instances.get('m1').queue.length, 0);
+  assert.equal(reg.instances.get('m2').queue.length, 0);
+  await reg.stop();
+});
+
+test('matchBroadcast respects acceptsBroadcast:false', async () => {
+  const reg = new Registry({ port: 0, recvTimeoutMs: 200 });
+  await reg.start();
+  const url = `http://127.0.0.1:${reg.port}`;
+  const hdrs = { 'content-type': 'application/json' };
+  await fetch(`${url}/register`, { method: 'POST', headers: hdrs, body: JSON.stringify({ instance_id: 'o1', slug: 'optout', cwd: '/x', accepts_broadcast: false }) });
+  assert.equal(reg.matchBroadcast(), 0);
+  await reg.stop();
+});

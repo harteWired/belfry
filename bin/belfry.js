@@ -444,6 +444,20 @@ async function main() {
   const onBroadcast = async ({ text, targetSlugs = null, excludeSlugs = null, messageId = null, source = 'telegram', quiet = false }) => {
     let anchorId = messageId;
     let cliPlaceholder = false;
+    // Anchorless (CLI/script) broadcast with nobody to reach: answer in the
+    // HTTP response + log only — no placeholder, no "no sessions registered"
+    // on the human's phone. Headless agents ping /broadcast for progress (and
+    // sometimes target a slug that lives on another host, where the filter
+    // matches nothing); each such no-op was two Telegram messages of pure
+    // noise (2026-07-08: an Erebus driver produced 13 in 20 minutes). A human
+    // /all keeps its in-chat confirmation even at 0 — they asked in the chat.
+    // Precount, not reorder: the anchor must still exist before fan-out so no
+    // session reply can beat the threading + tracker setup.
+    if (!anchorId && registry.matchBroadcast({ targetSlugs, excludeSlugs }) === 0) {
+      const { count, slugs } = registry.broadcast(text, { targetSlugs, excludeSlugs });
+      log(`broadcast (${source}) → ${count} session(s) — no recipients, Telegram confirmation suppressed`);
+      return { count, slugs };
+    }
     if (!anchorId) {
       try {
         const r = await sendMessage({ botToken, chatId, text: '📡 broadcasting…', forumTopicId: forumTopicId || null });

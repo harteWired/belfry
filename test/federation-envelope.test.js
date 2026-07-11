@@ -152,3 +152,13 @@ test('inbound envelope: malformed attachment is rejected (#41)', () => {
   assert.throws(() => buildEnvelope({ ...base, attachment: { kind: 'photo' } }), /attachment/);
   assert.throws(() => buildEnvelope({ ...base, attachment: { fileId: 'x', kind: 'archive' } }), /attachment/);
 });
+
+test('inbound envelope: caption-less attachment (empty text) is legal; empty text alone is not (#41)', () => {
+  const base = { kind: 'inbound', from: { host: 'f' }, to: { host: 'j', slug: 'belfry' }, correlationId: 'c', chatId: 1, originatingMessageId: 2, ts: 3 };
+  const env = buildEnvelope({ ...base, text: '', attachment: { fileId: 'AgFAKE', kind: 'photo' } });
+  assert.equal(env.text, '');
+  assert.deepEqual(env.attachment, { fileId: 'AgFAKE', kind: 'photo' });
+  const parsed = parseEnvelope(JSON.stringify(env));
+  assert.equal(parsed.ok, true, 'round-trips through parse');
+  assert.throws(() => buildEnvelope({ ...base, text: '' }), /non-empty/, 'no attachment → text still required');
+});

@@ -1,6 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { setMessageReaction, sendDocument } from '../lib/telegram.js';
+import {
+  setMessageReaction,
+  sendDocument,
+  downloadFile,
+  parseByteSize,
+  resolveFileCap,
+  TELEGRAM_DOWNLOAD_CEILING,
+} from '../lib/telegram.js';
 
 // --- sendDocument (#outbound files) ---
 function fileFetch(captured, { ok = true, status = 200, result = { ok: true, result: { message_id: 1 } } } = {}) {
@@ -98,4 +105,86 @@ test('throws on a non-ok HTTP response', async () => {
     () => setMessageReaction({ botToken: 'TOK', chatId: 1, messageId: 2, emoji: '🛠', fetchImpl }),
     /setMessageReaction failed: 400/,
   );
+});
+
+// --- attachment size cap (BELFRY_ATTACHMENT_MAX_BYTES) ---
+test('parseByteSize accepts plain bytes and unit suffixes', () => {
+  assert.equal(parseByteSize('4194304'), 4194304);
+  assert.equal(parseByteSize('8mb'), 8 * 1024 * 1024);
+  assert.equal(parseByteSize('8 MB'), 8 * 1024 * 1024);
+  assert.equal(parseByteSize('512k'), 512 * 1024);
+  assert.equal(parseByteSize('1.5m'), Math.round(1.5 * 1024 * 1024));
+  assert.equal(parseByteSize('1g'), 1024 ** 3);
+});
+
+test('parseByteSize returns null for empty/invalid/non-positive input', () => {
+  for (const bad of ['', '   ', undefined, null, 'lots', '-5', '0', '4tb', '1..2m']) {
+    assert.equal(parseByteSize(bad), null, `expected null for ${JSON.stringify(bad)}`);
+  }
+});
+
+test('resolveFileCap defaults to 4 MB when the env is unset or invalid', () => {
+  assert.equal(resolveFileCap({}), 4 * 1024 * 1024);
+  assert.equal(resolveFileCap({ BELFRY_ATTACHMENT_MAX_BYTES: 'garbage' }), 4 * 1024 * 1024);
+});
+
+test('resolveFileCap honours a valid override and clamps to Telegram\'s 20 MB ceiling', () => {
+  assert.equal(resolveFileCap({ BELFRY_ATTACHMENT_MAX_BYTES: '8mb' }), 8 * 1024 * 1024);
+  assert.equal(resolveFileCap({ BELFRY_ATTACHMENT_MAX_BYTES: '50mb' }), TELEGRAM_DOWNLOAD_CEILING);
+});
+
+// downloadFile: getFile meta first, then the file bytes.
+function downloadFetch({ declaredSize, bytesLen }) {
+  let call = 0;
+  return async () => {
+    call += 1;
+    if (call === 1) {
+      return {
+        ok: true,
+        json: async () => ({ ok: true, result: { file_path: 'photos/x.jpg', file_size: declaredSize } }),
+      };
+    }
+    return { ok: true, arrayBuffer: async () => new Uint8Array(bytesLen).buffer };
+  };
+}
+
+test('downloadFile rejects on the declared getFile size before streaming', async () => {
+  let streamed = false;
+  const fetchImpl = async (url) => {
+    if (url.includes('/file/')) { streamed = true; }
+    if (url.endsWith('/getFile')) {
+      return { ok: true, json: async () => ({ ok: true, result: { file_path: 'a.jpg', file_size: 9_000_000 } }) };
+    }
+    return { ok: true, arrayBuffer: async () => new ArrayBuffer(0) };
+  };
+  await assert.rejects(
+    () => downloadFile({ botToken: 'T', fileId: 'F', destDir: '/tmp/x', destName: 'd', fetchImpl, sizeCap: 4 * 1024 * 1024 }),
+    /file too large: 9000000 > 4194304/,
+  );
+  assert.equal(streamed, false, 'must not stream bytes once the declared size exceeds the cap');
+});
+
+test('downloadFile backstops on streamed length when getFile omits file_size', async () => {
+  const fetchImpl = downloadFetch({ declaredSize: undefined, bytesLen: 5_000_000 });
+  await assert.rejects(
+    () => downloadFile({ botToken: 'T', fileId: 'F', destDir: '/tmp/x', destName: 'd', fetchImpl, sizeCap: 4 * 1024 * 1024 }),
+    /file too large: 5000000 > 4194304/,
+  );
+});
+
+test('downloadFile writes the file when a raised cap admits it', async () => {
+  const writes = [];
+  const fs = {
+    mkdirSync: () => {},
+    writeFileSync: (out, buf) => writes.push({ out, len: buf.length }),
+  };
+  const path = { extname: () => '.jpg', join: (...p) => p.join('/') };
+  const fetchImpl = downloadFetch({ declaredSize: 6_000_000, bytesLen: 6_000_000 });
+  const out = await downloadFile({
+    botToken: 'T', fileId: 'F', destDir: '/tmp/x', destName: 'd',
+    fetchImpl, fs, path, sizeCap: 8 * 1024 * 1024,
+  });
+  assert.equal(out, '/tmp/x/d.jpg');
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].len, 6_000_000);
 });

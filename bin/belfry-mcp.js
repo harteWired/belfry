@@ -400,8 +400,15 @@ async function recvLoop() {
       await sleep(RECONNECT_BACKOFF_MS);
       continue;
     }
-    if (typeof body?.text === 'string' && body.text.length > 0) {
-      injectChannelMessage(body.text, {
+    // A caption-less photo/voice arrives as EMPTY text + an attachment path.
+    // Inject it with a minimal placeholder — the harness may silently drop an
+    // empty-text channel notification (#37), and this guard used to discard
+    // the item entirely, which is where inbound photos died last (2026-07-10).
+    const hasAttachment = typeof body?.image_path === 'string' || typeof body?.voice_path === 'string';
+    if (typeof body?.text === 'string' && (body.text.length > 0 || hasAttachment)) {
+      const textOut = body.text.length > 0 ? body.text
+        : (typeof body.image_path === 'string' ? '[photo attached]' : '[voice note attached]');
+      injectChannelMessage(textOut, {
         imagePath: typeof body.image_path === 'string' ? body.image_path : undefined,
         voicePath: typeof body.voice_path === 'string' ? body.voice_path : undefined,
         broadcast: body.broadcast === true,

@@ -406,3 +406,27 @@ test('plugin unregisters cleanly on stdin close', async () => {
   }
   assert.equal(registry.bySlug.has('unreg'), false);
 });
+
+test('caption-less photo (empty text + image_path) still injects, with a placeholder (#41 regression)', async () => {
+  // The recv guard used to require text.length > 0, silently discarding a
+  // photo-only delivery one hop from the session — with the file already on
+  // disk. Empty text + attachment must inject, with non-empty placeholder
+  // text so the harness never sees an empty-text channel notification (#37).
+  const p = startPlugin({ env: { CLAUDELIKE_BAR_NAME: 'r-photo' } });
+  p.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2024-11-05' } });
+  await p.waitFor((m) => m.id === 1);
+  p.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  const start = Date.now();
+  while (Date.now() - start < 2000) {
+    if (registry.bySlug.has('r-photo')) break;
+    await new Promise((r) => setTimeout(r, 20));
+  }
+  assert.ok(registry.bySlug.has('r-photo'));
+
+  registry.deliver('r-photo', '', null, { imagePath: '/tmp/att/photo-fed-1.jpg' });
+
+  const notif = await p.waitFor((m) => m.method === 'notifications/claude/channel', 3000);
+  assert.equal(notif.params.content, '[photo attached]');
+  assert.equal(notif.params.image_path, '/tmp/att/photo-fed-1.jpg');
+  await p.stop();
+});

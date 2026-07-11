@@ -15,6 +15,7 @@ import {
   sendDocument as rawSendDocument,
   setMessageReaction as rawSetMessageReaction,
   editMessageText as rawEditMessageText,
+  downloadFile,
 } from '../lib/telegram.js';
 import { SendQueue, DEFAULT_SEND_INTERVAL_MS } from '../lib/send-queue.js';
 import { ReplyTracker } from '../lib/reply-tracker.js';
@@ -571,6 +572,18 @@ async function main() {
         // so the log + confirmation say who broadcast.
         onFedBroadcast: ({ text, targetSlugs, excludeSlugs, from }) =>
           onBroadcast({ text, targetSlugs, excludeSlugs, messageId: null, source: `fed:${from}` }),
+        // Inbound-attachment leg (#41 across the mesh): a forwarded photo or
+        // document arrives as a Telegram file_id; download it locally with
+        // this host's own bot token (file access is not owner-exclusive) so
+        // the session gets a path on this disk. Cred-less nodes leave it null.
+        downloadAttachment: (botToken && chatId)
+          ? ({ fileId, kind, name }) => downloadFile({
+              botToken,
+              fileId,
+              destDir: attachmentDir,
+              destName: `${kind === 'photo' ? 'photo' : 'doc'}-fed-${Date.now()}${name ? `-${name.replace(/[^\w.-]/g, '_').replace(/\.[^.]*$/, '').slice(0, 60)}` : ''}`,
+            })
+          : null,
         bind: fedBind,
         port: fedPort,
         log,

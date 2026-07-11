@@ -523,3 +523,97 @@ test('/fed/broadcast: default (no broadcastHosts) refuses everyone', async () =>
   await fed.stop();
   await reg.stop();
 });
+
+test('/fed/inbound with a photo attachment: receiving host downloads it and delivers image_path (#41)', async () => {
+  const reg = new Registry({ port: 0, authToken: null });
+  await reg.start();
+  const sess = fakeSession(reg, 'web-design-pipeline', 'att-a');
+  const downloads = [];
+  const fed = await wireFederation({
+    registry: reg,
+    port: await freePort(),
+    fedConfig: {
+      enabled: true, hostLetter: 'j', hostName: 'Jinn', token: TOKEN,
+      peers: [{ letter: 'f', name: 'Fornax', addr: 'http://127.0.0.1:1' }],
+    },
+    downloadAttachment: async (a) => { downloads.push(a); return `/local/att/photo-fed-1.jpg`; },
+  });
+  const res = await fetch(`http://127.0.0.1:${fed.port}/fed/inbound`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({
+      v: 1, kind: 'inbound', from: { host: 'f' }, to: { host: 'j', slug: 'web-design-pipeline' },
+      text: 'use this hero image', correlationId: 'corr-att', chatId: 42, originatingMessageId: 900,
+      attachment: { fileId: 'AgFAKEPHOTO', kind: 'photo' }, ts: 1,
+    }),
+  });
+  assert.equal((await res.json()).delivered, 1);
+  assert.deepEqual(downloads, [{ fileId: 'AgFAKEPHOTO', kind: 'photo' }]);
+  assert.equal(sess.queue.length, 1);
+  assert.equal(sess.queue[0].text, 'use this hero image');
+  assert.equal(sess.queue[0].image_path, '/local/att/photo-fed-1.jpg');
+  await fed.stop();
+  await reg.stop();
+});
+
+test('/fed/inbound with a document attachment: local path is appended to the delivered text (#41)', async () => {
+  const reg = new Registry({ port: 0, authToken: null });
+  await reg.start();
+  const sess = fakeSession(reg, 'api', 'att-d');
+  const fed = await wireFederation({
+    registry: reg,
+    port: await freePort(),
+    fedConfig: {
+      enabled: true, hostLetter: 'j', hostName: 'Jinn', token: TOKEN,
+      peers: [{ letter: 'f', name: 'Fornax', addr: 'http://127.0.0.1:1' }],
+    },
+    downloadAttachment: async () => '/local/att/doc-fed-2-spec.pdf',
+  });
+  const res = await fetch(`http://127.0.0.1:${fed.port}/fed/inbound`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({
+      v: 1, kind: 'inbound', from: { host: 'f' }, to: { host: 'j', slug: 'api' },
+      text: 'review the spec', correlationId: 'corr-doc', chatId: 42, originatingMessageId: 901,
+      attachment: { fileId: 'BQFAKEDOC', kind: 'document', name: 'spec.pdf' }, ts: 1,
+    }),
+  });
+  assert.equal((await res.json()).delivered, 1);
+  assert.match(sess.queue[0].text, /review the spec/);
+  assert.match(sess.queue[0].text, /"spec\.pdf" saved to \/local\/att\/doc-fed-2-spec\.pdf/);
+  assert.equal(sess.queue[0].image_path, undefined);
+  await fed.stop();
+  await reg.stop();
+});
+
+test('/fed/inbound attachment download failure degrades to text-only delivery, never blocks (#41)', async () => {
+  const reg = new Registry({ port: 0, authToken: null });
+  await reg.start();
+  const sess = fakeSession(reg, 'api', 'att-f');
+  const logs = [];
+  const fed = await wireFederation({
+    registry: reg,
+    port: await freePort(),
+    log: (m) => logs.push(m),
+    fedConfig: {
+      enabled: true, hostLetter: 'j', hostName: 'Jinn', token: TOKEN,
+      peers: [{ letter: 'f', name: 'Fornax', addr: 'http://127.0.0.1:1' }],
+    },
+    downloadAttachment: async () => { throw new Error('telegram 404'); },
+  });
+  const res = await fetch(`http://127.0.0.1:${fed.port}/fed/inbound`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` },
+    body: JSON.stringify({
+      v: 1, kind: 'inbound', from: { host: 'f' }, to: { host: 'j', slug: 'api' },
+      text: 'photo attached', correlationId: 'corr-fail', chatId: 42, originatingMessageId: 902,
+      attachment: { fileId: 'AgGONE', kind: 'photo' }, ts: 1,
+    }),
+  });
+  assert.equal((await res.json()).delivered, 1, 'text still delivers');
+  assert.equal(sess.queue[0].text, 'photo attached');
+  assert.equal(sess.queue[0].image_path, undefined);
+  assert.ok(logs.some((l) => l.includes('failed to download')));
+  await fed.stop();
+  await reg.stop();
+});

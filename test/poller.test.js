@@ -991,3 +991,45 @@ test('tick: no gate wired → polls as before (inert)', async () => {
   await poller.tick();
   assert.equal(fetchCalls, 1);
 });
+
+test('sanitizeFileName: traversal stripped, charset bounded, null-safe (#41)', async () => {
+  const { sanitizeFileName } = await import('../lib/poller.js');
+  assert.equal(sanitizeFileName('spec.pdf'), 'spec.pdf');
+  assert.equal(sanitizeFileName('../../etc/passwd'), 'passwd');
+  assert.equal(sanitizeFileName('..\\..\\win.ini'), 'win.ini');
+  assert.equal(sanitizeFileName('weird$na%me!.pdf'), 'weird_na_me_.pdf');
+  assert.equal(sanitizeFileName('...hidden'), 'hidden');
+  assert.equal(sanitizeFileName(''), null);
+  assert.equal(sanitizeFileName(null), null);
+  assert.equal(sanitizeFileName('x'.repeat(200)).length, 80);
+});
+
+test('extractAttachment: photo keeps its fileId even when the local download fails (#41)', async () => {
+  const p = new Poller({
+    botToken: 't', expectedChatId: 1,
+    replyTracker: new ReplyTracker(),
+    target: { deliver: () => 1, hasSlug: () => false, knownSlugs: () => new Set() },
+    attachmentDir: os.tmpdir(),
+    fetchFn: async () => { throw new Error('network down'); },
+    log: () => {},
+  });
+  const att = await p.extractAttachment({ message_id: 5, photo: [{ file_id: 'small' }, { file_id: 'AgBIG' }] });
+  assert.equal(att.kind, 'photo');
+  assert.equal(att.fileId, 'AgBIG', 'largest size picked, fileId survives the failed download');
+  assert.equal(att.imagePath, undefined);
+});
+
+test('extractAttachment: document carries fileId + sanitized name (#41)', async () => {
+  const p = new Poller({
+    botToken: 't', expectedChatId: 1,
+    replyTracker: new ReplyTracker(),
+    target: { deliver: () => 1, hasSlug: () => false, knownSlugs: () => new Set() },
+    attachmentDir: os.tmpdir(),
+    fetchFn: async () => { throw new Error('network down'); },
+    log: () => {},
+  });
+  const att = await p.extractAttachment({ message_id: 6, document: { file_id: 'BQdoc', file_name: '../sneaky spec.pdf' } });
+  assert.equal(att.kind, 'document');
+  assert.equal(att.fileId, 'BQdoc');
+  assert.equal(att.name, 'sneaky spec.pdf');
+});

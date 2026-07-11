@@ -133,3 +133,22 @@ test('broadcast envelope: rejects missing text, bad from, malformed filters', ()
   const parsed = parseEnvelope({ v: 1, kind: 'broadcast', from: { host: 'w' }, text: 'hi', ts: 1 });
   assert.equal(parsed.ok, false);
 });
+
+test('inbound envelope: optional attachment rides as file_id + kind (+name), round-trips (#41)', () => {
+  const base = { kind: 'inbound', from: { host: 'f' }, to: { host: 'j', slug: 'api' }, text: 'see photo', correlationId: 'c1', chatId: 42, originatingMessageId: 9, ts: 5 };
+  const photo = buildEnvelope({ ...base, attachment: { fileId: 'AgFAKE', kind: 'photo' } });
+  assert.deepEqual(photo.attachment, { fileId: 'AgFAKE', kind: 'photo' });
+  const doc = buildEnvelope({ ...base, attachment: { fileId: 'BQdoc', kind: 'document', name: 'spec.pdf' } });
+  assert.deepEqual(doc.attachment, { fileId: 'BQdoc', kind: 'document', name: 'spec.pdf' });
+  const parsed = parseEnvelope(JSON.stringify(doc));
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(parsed.envelope.attachment, { fileId: 'BQdoc', kind: 'document', name: 'spec.pdf' });
+  // No attachment → field absent, exactly as before (wire back-compat).
+  assert.equal('attachment' in buildEnvelope(base), false);
+});
+
+test('inbound envelope: malformed attachment is rejected (#41)', () => {
+  const base = { kind: 'inbound', from: { host: 'f' }, to: { host: 'j', slug: 'api' }, text: 'x', correlationId: 'c', chatId: 1, originatingMessageId: 2 };
+  assert.throws(() => buildEnvelope({ ...base, attachment: { kind: 'photo' } }), /attachment/);
+  assert.throws(() => buildEnvelope({ ...base, attachment: { fileId: 'x', kind: 'archive' } }), /attachment/);
+});

@@ -739,3 +739,18 @@ test('POST /broadcast is refused when allowLocalBroadcast is false (wintermute-o
   assert.equal(calls.length, 0, 'orchestrator never runs');
   await reg.stop();
 });
+
+test('deliver: a document attachment (filePath) is surfaced as an appended text line (#41)', async () => {
+  const reg = new Registry({ port: 0, recvTimeoutMs: 200 });
+  await reg.start();
+  const url = `http://127.0.0.1:${reg.port}`;
+  const hdrs = { 'content-type': 'application/json' };
+  await fetch(`${url}/register`, { method: 'POST', headers: hdrs, body: JSON.stringify({ instance_id: 'da', slug: 'docsess', cwd: '/x' }) });
+  reg.deliver('docsess', 'here is the spec', null, { filePath: '/tmp/att/doc-1-spec.pdf', name: 'spec.pdf' });
+  const r = await fetch(`${url}/recv?instance_id=da`);
+  const body = await r.json();
+  assert.match(body.text, /here is the spec/);
+  assert.match(body.text, /"spec\.pdf" saved to \/tmp\/att\/doc-1-spec\.pdf/);
+  assert.equal(body.image_path, undefined);
+  await reg.stop();
+});

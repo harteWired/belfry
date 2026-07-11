@@ -114,7 +114,7 @@ test('a HUMAN inbound (has chatId + originatingMessageId) forwards via forwardIn
   t.deliver('e/erebus-master', 'hi from matt', 3100);
   await flush();
   assert.equal(federation.forwards.length, 1, 'used the human inbound-forward path');
-  assert.deepEqual(federation.forwards[0], { target: 'e/erebus-master', text: 'hi from matt', ctx: { chatId: 8471234222, originatingMessageId: 3100 } });
+  assert.deepEqual(federation.forwards[0], { target: 'e/erebus-master', text: 'hi from matt', ctx: { chatId: 8471234222, originatingMessageId: 3100, attachment: null } });
   assert.equal(federation.relays.length, 0, 'did NOT use the agent relay');
 });
 
@@ -126,4 +126,39 @@ test('a cold federated send (no originatingMessageId) falls back to the agent re
   await flush();
   assert.equal(federation.relays.length, 1, 'no Telegram context → agent relay');
   assert.equal(federation.forwards.length, 0);
+});
+
+test('federated deliver forwards an attachment as its file_id (#41 cross-host)', async () => {
+  const registry = fakeRegistry();
+  const federation = fakeFederation({ handled: true, ok: true });
+  const t = makeDeliveryTarget({ registry, federation, chatId: 42 });
+  t.deliver('j/web-design-pipeline', 'look at this', 900, {
+    kind: 'photo', fileId: 'AgACAgFAKE', imagePath: '/owner/disk/photo.jpg',
+  });
+  await flush();
+  assert.equal(federation.forwards.length, 1);
+  const fwd = federation.forwards[0];
+  assert.deepEqual(fwd.ctx.attachment, { fileId: 'AgACAgFAKE', kind: 'photo' }, 'file_id crosses; the owner-local path does not');
+});
+
+test('federated deliver forwards a document attachment with its name (#41 cross-host)', async () => {
+  const registry = fakeRegistry();
+  const federation = fakeFederation({ handled: true, ok: true });
+  const t = makeDeliveryTarget({ registry, federation, chatId: 42 });
+  t.deliver('j/api', 'here is the spec', 901, {
+    kind: 'document', fileId: 'BQACdoc', name: 'spec.pdf', filePath: '/owner/disk/doc.pdf',
+  });
+  await flush();
+  assert.deepEqual(federation.forwards[0].ctx.attachment, { fileId: 'BQACdoc', kind: 'document', name: 'spec.pdf' });
+});
+
+test('federated deliver drops only an attachment WITHOUT a file_id, with a log', async () => {
+  const registry = fakeRegistry();
+  const federation = fakeFederation({ handled: true, ok: true });
+  const logs = [];
+  const t = makeDeliveryTarget({ registry, federation, chatId: 42, log: (m) => logs.push(m) });
+  t.deliver('j/api', 'voice note', 902, { voicePath: '/tmp/v.ogg' });
+  await flush();
+  assert.equal(federation.forwards[0].ctx.attachment, null);
+  assert.ok(logs.some((l) => l.includes('no file_id')));
 });

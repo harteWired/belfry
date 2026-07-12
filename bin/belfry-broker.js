@@ -96,6 +96,24 @@ const TOOLS = [
       additionalProperties: false,
     },
   },
+  {
+    name: 'send_many',
+    description:
+      'Fan ONE message out to SEVERAL peer sessions in a single call (batch send_to, #50). Use this instead of N send_to calls whenever you are telling multiple sessions the same thing — the daemon owns the fan-out, it costs one rate-limit token instead of one per recipient, and you get a per-recipient result (delivered / no live session / failed) in one response. Recipients may be bare slugs or "<letter>/<slug>" cross-host targets, up to 32. Per-recipient messages that differ in content still need individual send_to calls. Not for answering the human.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slugs: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Destination session slugs (e.g. ["api", "e/nuc", "s/vault"]). 1-32 entries.',
+        },
+        text: { type: 'string', description: 'Message text delivered identically to every recipient.' },
+      },
+      required: ['slugs', 'text'],
+      additionalProperties: false,
+    },
+  },
 ];
 
 const INSTRUCTIONS =
@@ -220,6 +238,7 @@ class Session {
     const name = msg.params?.name;
     const args = msg.params?.arguments ?? {};
     if (name === 'send_to') return this.handleSendTo(msg, args);
+    if (name === 'send_many') return this.handleSendMany(msg, args);
     if (name !== 'reply') { this.respondError(msg.id, -32602, `unknown tool: ${name}`); return; }
     const text = typeof args.text === 'string' ? args.text : '';
     const files = Array.isArray(args.files) ? args.files.filter((f) => typeof f === 'string' && f) : [];
@@ -271,6 +290,42 @@ class Session {
       ? `Relayed to "${toSlug}" (${delivered} live session(s)).`
       : `"${toSlug}" has no live session right now — nothing delivered.`;
     this.respond(msg.id, { content: [{ type: 'text', text: `${summary}\n\nSent text:\n${text}` }] });
+  }
+
+  async handleSendMany(msg, args) {
+    const slugs = Array.isArray(args.slugs) ? args.slugs.filter((s) => typeof s === 'string' && s.trim()).map((s) => s.trim()) : [];
+    const text = typeof args.text === 'string' ? args.text : '';
+    if (slugs.length === 0) { this.respondError(msg.id, -32602, 'send_many: slugs must be a non-empty array of slug strings'); return; }
+    if (text.length === 0) { this.respondError(msg.id, -32602, 'send_many: text must be a non-empty string'); return; }
+    const res = await fetch(`${DAEMON_BASE}/send-many`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeaders() },
+      body: JSON.stringify({ instance_id: this.instanceId, to_slugs: slugs, text }),
+    });
+    if (res.status === 429) {
+      const body = await res.json().catch(() => ({}));
+      this.respondError(msg.id, -32603, `send_many rate-limited (${body?.reason ?? 'rate'}) — slow down peer messaging`);
+      return;
+    }
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => '');
+      this.respondError(msg.id, -32603, `daemon /send-many ${res.status}: ${errBody.slice(0, 200)}`);
+      return;
+    }
+    const body = await res.json().catch(() => ({}));
+    const results = Array.isArray(body?.results) ? body.results : [];
+    const lines = results.map((r) => {
+      if (r.delivered > 0) return `  ✓ ${r.to} — delivered (${r.delivered} session(s)${r.remote ? `, via host ${r.host}` : ''})`;
+      if (r.ok) return `  ✗ ${r.to} — no live session, nothing delivered`;
+      return `  ✗ ${r.to} — failed (${r.reason ?? 'unknown'})`;
+    });
+    const reached = results.filter((r) => r.delivered > 0).length;
+    this.respond(msg.id, {
+      content: [{
+        type: 'text',
+        text: `Fanned out to ${reached}/${results.length} recipient(s):\n${lines.join('\n')}\n\nSent text:\n${text}`,
+      }],
+    });
   }
 
   async register() {

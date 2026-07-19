@@ -756,6 +756,7 @@ async function main() {
   // tool which uses the in-memory ring instead).
   const brainHandlers = makeBrainHandlers({
     getWatcher: () => watcher,
+    getFederation: () => federation,
     recentMessages,
     nicknames,
     registry,
